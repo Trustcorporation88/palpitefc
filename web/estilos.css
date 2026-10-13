@@ -9,6 +9,9 @@
   --lima-escura: #243018;
   --erro: #ffb4a8;
   --ok: #b6f3c4;
+  --azul: #8fc8ff;
+  --ouro: #ffd27a;
+  --fundo-fundo: #121b14;
   --sombra: 0 16px 40px rgba(0, 0, 0, 0.28);
   font-family: "Segoe UI", system-ui, sans-serif;
 }
@@ -26,6 +29,12 @@ body {
 button, select {
   font: inherit;
   color: inherit;
+}
+
+:focus-visible { outline: 2px solid var(--lima); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; }
 }
 
 .topo, main, .aviso { width: min(760px, calc(100% - 28px)); margin-inline: auto; }
@@ -78,10 +87,10 @@ main { padding-bottom: 108px; }
 
 .barras { margin: 12px 0 4px; }
 .linha-mercado { align-items: center; font-size: 0.86rem; margin: 6px 0; }
-.linha-mercado span:first-child { width: 72px; }
+.linha-mercado span:first-child { width: 76px; white-space: nowrap; }
 .trilho { flex: 1; height: 8px; background: #121b14; border-radius: 99px; overflow: hidden; }
 .trilho i { display: block; height: 100%; background: var(--lima); border-radius: 99px; }
-.linha-mercado.destaque .trilho i { background: var(--texto); }
+.linha-mercado.destaque .trilho:not(.fino) i { background: var(--texto); }
 .leitura { margin: 8px 0 0; font-size: 0.92rem; }
 .leitura.ok { color: var(--ok); }
 .leitura.erro { color: var(--erro); }
@@ -114,7 +123,7 @@ select {
   transform: translateX(-50%);
   width: min(760px, calc(100% - 20px));
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 6px;
   padding: 6px;
   background: rgba(16, 23, 18, 0.92);
@@ -126,8 +135,10 @@ select {
   background: transparent;
   border: 0;
   border-radius: 12px;
-  padding: 10px 4px;
+  padding: 10px 2px;
   color: var(--mudo);
+  font-size: 0.9rem;
+  cursor: pointer;
 }
 .menu button.ativa { background: var(--lima); color: #17200f; font-weight: 750; }
 
@@ -163,3 +174,101 @@ select {
 .termo-caixa button:disabled { opacity: 0.45; }
 
 .vazio { color: var(--mudo); }
+
+/* Barras do modelo e da odd sem margem */
+.trilhos { flex: 1; display: grid; gap: 3px; }
+.trilho.fino { height: 4px; }
+.trilho.fino i { background: var(--azul); }
+.linha-mercado .valor { width: 64px; text-align: right; }
+.linha-mercado .valor small { display: block; color: var(--azul); font-size: 0.72rem; }
+.linha-mercado.saiu span:first-child { color: var(--texto); font-weight: 700; }
+.linha-mercado.saiu span:first-child::after { content: " ✓"; color: var(--ok); }
+.legenda { color: var(--mudo); font-size: 0.75rem; margin: 6px 0 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ponto { display: inline-block; width: 9px; height: 9px; border-radius: 3px; background: var(--mudo); }
+.ponto.modelo { background: var(--lima); }
+.ponto.odd { background: var(--azul); margin-left: 8px; }
+.placares { flex-wrap: wrap; }
+
+/* Tabelas */
+.rolagem { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
+.tabela { width: 100%; border-collapse: collapse; font-size: 0.88rem; font-variant-numeric: tabular-nums; }
+.tabela th { text-align: left; color: var(--mudo); font-weight: 600; font-size: 0.75rem; white-space: nowrap; }
+.tabela td, .tabela th { padding: 7px 4px; border-bottom: 1px solid var(--linha); }
+.tabela td:nth-child(n+3), .tabela th:nth-child(n+3) { text-align: right; }
+.tabela.forca td:nth-child(2), .tabela.forca th:nth-child(2),
+.tabela.chances td:nth-child(2), .tabela.chances th:nth-child(2),
+.tabela.notas td:nth-child(2), .tabela.notas th:nth-child(2) { text-align: right; }
+.tabela td small { color: var(--mudo); font-size: 0.72rem; }
+.tabela .pos { width: 30px; font-weight: 700; color: var(--mudo); border-left: 3px solid transparent; padding-left: 6px; }
+.pos.tom-lima { border-left-color: var(--lima); }
+.pos.tom-azul { border-left-color: var(--azul); }
+.pos.tom-erro { border-left-color: var(--erro); }
+.chances { min-width: 520px; }
+.chance { --cor: 223, 245, 106; background: rgba(var(--cor), calc(var(--forca) * 0.42)); }
+.chance.tom-ouro { --cor: 255, 210, 122; }
+.chance.tom-azul { --cor: 143, 200, 255; }
+.chance.tom-erro { --cor: 255, 180, 168; }
+.legenda-zonas { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--mudo); font-size: 0.75rem; margin: 10px 0 0; }
+.legenda-zonas span { display: flex; align-items: center; gap: 6px; }
+.ponto.tom-lima { background: var(--lima); }
+.ponto.tom-azul { background: var(--azul); }
+.ponto.tom-erro { background: var(--erro); }
+
+/* Time a time */
+.numeros.tres { grid-template-columns: repeat(3, 1fr); }
+.distribuicao { display: grid; grid-template-columns: repeat(20, 1fr); gap: 2px; align-items: end; height: 90px; margin-top: 12px; }
+.coluna { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 3px; }
+.coluna i { display: block; width: 100%; background: var(--mudo); border-radius: 3px 3px 0 0; }
+.coluna.tom-lima i { background: var(--lima); }
+.coluna.tom-azul i { background: var(--azul); }
+.coluna.tom-erro i { background: var(--erro); }
+.coluna span { font-size: 0.6rem; color: var(--mudo); }
+.pequeno { font-size: 0.75rem; }
+
+/* Simulador */
+.dupla { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: end; }
+.trocar, .botao {
+  border: 1px solid var(--linha);
+  background: var(--fundo-fundo);
+  border-radius: 12px;
+  padding: 11px 12px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.botao { margin: 6px 0 0; }
+.grade { border-collapse: separate; border-spacing: 3px; margin: 6px auto 0; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.grade caption { caption-side: bottom; color: var(--mudo); font-size: 0.72rem; padding-top: 6px; }
+.grade th { color: var(--mudo); font-weight: 600; padding: 4px; }
+.grade td { background: rgba(223, 245, 106, calc(var(--forca) * 0.55)); border-radius: 6px; padding: 7px 6px; text-align: center; min-width: 44px; }
+
+/* Gráficos */
+.grafico { width: 100%; height: auto; display: block; margin-top: 8px; }
+.grafico.quadrado { max-width: 360px; margin-inline: auto; }
+.grafico text { fill: var(--mudo); font-size: 11px; }
+.grafico .guia { stroke: var(--linha); stroke-width: 1; }
+.grafico .serie { fill: none; stroke-width: 2.5; stroke-linejoin: round; }
+.grafico .serie.modelo { stroke: var(--lima); }
+.grafico .serie.odd { stroke: var(--azul); }
+.grafico circle.modelo { fill: var(--lima); }
+.grafico circle.odd { fill: var(--azul); }
+
+@media (max-width: 420px) {
+  .menu button { font-size: 0.8rem; }
+  .numeros.tres .numero b { font-size: 1.15rem; }
+  .linha-mercado span:first-child { width: 66px; }
+}
+
+/* Zonas de 2026 e impacto */
+:root { --ciano: #7fe0c9; }
+.pos.tom-ciano { border-left-color: var(--ciano); }
+.ponto.tom-ciano { background: var(--ciano); }
+.coluna.tom-ciano i { background: var(--ciano); }
+.chance.tom-ciano { --cor: 127, 224, 201; }
+.chances { min-width: 600px; }
+.grafico .diagonal { stroke: var(--mudo); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.7; }
+.impactos { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+.impacto { background: var(--fundo-fundo); border-radius: 12px; padding: 10px 12px; }
+.impacto p { margin: 0 0 4px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.impacto p small { color: var(--mudo); font-size: 0.75rem; }
+.impacto ul { margin: 0; padding-left: 16px; color: var(--mudo); font-size: 0.82rem; line-height: 1.5; }
+.impacto ul b { color: var(--texto); font-weight: 600; }

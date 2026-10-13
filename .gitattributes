@@ -1,0 +1,4 @@
+* text=auto eol=lf
+# Os arquivos de dados ficam byte a byte como o football-data entrega.
+data/*.csv -text
+data/*.json -text

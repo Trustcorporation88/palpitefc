@@ -3,3 +3,7 @@ builder = "NIXPACKS"
 
 [deploy]
 startCommand = "uvicorn palpitefc.server:app --host 0.0.0.0 --port ${PORT:-8080}"
+healthcheckPath = "/api/saude"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

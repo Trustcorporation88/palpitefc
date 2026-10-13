@@ -13,7 +13,10 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.special import gammaln
 
-XI_DECAIMENTO = 0.003
+# Escolhidos por `python -m palpitefc.calibrar`: menor RPS em 2024 e 2025,
+# jogo a jogo e sem olhar o resultado à frente.
+XI_DECAIMENTO = 0.002
+L2_PADRAO = 10.0
 GOLS_MAX = 10
 RHO_LIMITE = 0.2
 
@@ -81,6 +84,18 @@ def placares_provaveis(grade: np.ndarray, limite: int = 3) -> list[dict[str, flo
     ]
 
 
+def _desempacotar(parametros: np.ndarray, n_times: int) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """O último time fecha a soma zero de ataque e de defesa."""
+    livres = n_times - 1
+    ataque = np.empty(n_times)
+    defesa = np.empty(n_times)
+    ataque[:livres] = parametros[:livres]
+    ataque[livres] = -ataque[:livres].sum()
+    defesa[:livres] = parametros[livres : 2 * livres]
+    defesa[livres] = -defesa[:livres].sum()
+    return ataque, defesa, float(parametros[-2]), float(parametros[-1])
+
+
 def _verossimilhanca_negativa(
     parametros: np.ndarray,
     casa: np.ndarray,
@@ -89,30 +104,36 @@ def _verossimilhanca_negativa(
     gols_fora: np.ndarray,
     pesos: np.ndarray,
     n_times: int,
-) -> float:
-    livres = n_times - 1
-    ataque = np.zeros(n_times)
-    defesa = np.zeros(n_times)
-    ataque[:livres] = parametros[:livres]
-    ataque[livres] = -ataque[:livres].sum()
-    defesa[:livres] = parametros[livres : 2 * livres]
-    defesa[livres] = -defesa[:livres].sum()
-    mando = float(parametros[-2])
-    rho = float(parametros[-1])
-
+    l2: float = 0.0,
+) -> tuple[float, np.ndarray]:
+    """Valor e gradiente analítico. Sem o gradiente, o L-BFGS-B estima cada
+    derivada por diferença finita e o ajuste fica dezenas de vezes mais lento."""
+    ataque, defesa, mando, rho = _desempacotar(parametros, n_times)
     lam = np.exp(mando + ataque[casa] + defesa[fora])
     mu = np.exp(ataque[fora] + defesa[casa])
+
     tau = np.ones(len(gols_casa))
+    dtau_lam = np.zeros(len(gols_casa))
+    dtau_mu = np.zeros(len(gols_casa))
+    dtau_rho = np.zeros(len(gols_casa))
     zero_zero = (gols_casa == 0) & (gols_fora == 0)
     zero_um = (gols_casa == 0) & (gols_fora == 1)
     um_zero = (gols_casa == 1) & (gols_fora == 0)
     um_um = (gols_casa == 1) & (gols_fora == 1)
     tau[zero_zero] = 1.0 - lam[zero_zero] * mu[zero_zero] * rho
+    dtau_lam[zero_zero] = -mu[zero_zero] * rho
+    dtau_mu[zero_zero] = -lam[zero_zero] * rho
+    dtau_rho[zero_zero] = -lam[zero_zero] * mu[zero_zero]
     tau[zero_um] = 1.0 + lam[zero_um] * rho
+    dtau_lam[zero_um] = rho
+    dtau_rho[zero_um] = lam[zero_um]
     tau[um_zero] = 1.0 + mu[um_zero] * rho
+    dtau_mu[um_zero] = rho
+    dtau_rho[um_zero] = mu[um_zero]
     tau[um_um] = 1.0 - rho
-    if np.any(tau <= 1e-8) or np.any(lam <= 0) or np.any(mu <= 0):
-        return 1e12
+    dtau_rho[um_um] = -1.0
+    if np.any(tau <= 1e-8):
+        return 1e12, np.zeros_like(parametros)
 
     log_p = (
         np.log(tau)
@@ -123,11 +144,36 @@ def _verossimilhanca_negativa(
         - mu
         - gammaln(gols_fora + 1)
     )
-    return float(-(pesos * log_p).sum())
+    valor = float(-(pesos * log_p).sum())
+
+    # Derivada do log da chance em relação ao log de lam e de mu.
+    g_lam = pesos * (gols_casa - lam + lam * dtau_lam / tau)
+    g_mu = pesos * (gols_fora - mu + mu * dtau_mu / tau)
+    g_rho = float((pesos * dtau_rho / tau).sum())
+    d_ataque = np.bincount(casa, g_lam, n_times) + np.bincount(fora, g_mu, n_times)
+    d_defesa = np.bincount(fora, g_lam, n_times) + np.bincount(casa, g_mu, n_times)
+    d_mando = float(g_lam.sum())
+
+    if l2 > 0:
+        valor += l2 * float((ataque**2).sum() + (defesa**2).sum())
+        d_ataque = d_ataque - 2 * l2 * ataque
+        d_defesa = d_defesa - 2 * l2 * defesa
+
+    livres = n_times - 1
+    gradiente = np.empty_like(parametros)
+    gradiente[:livres] = d_ataque[:livres] - d_ataque[livres]
+    gradiente[livres : 2 * livres] = d_defesa[:livres] - d_defesa[livres]
+    gradiente[-2] = d_mando
+    gradiente[-1] = g_rho
+    return valor, -gradiente
 
 
-def ajustar(jogos: list[dict], xi: float = XI_DECAIMENTO) -> Modelo:
-    """Ajusta ataque, defesa, mando e rho. `jogos` traz casa, fora, gols e dias."""
+def ajustar(jogos: list[dict], xi: float = XI_DECAIMENTO, l2: float = L2_PADRAO) -> Modelo:
+    """Ajusta ataque, defesa, mando e rho. `jogos` traz casa, fora, gols e dias.
+
+    `l2` puxa ataque e defesa para a média. Ajuda o time recém-promovido, que
+    chega com poucos jogos na base.
+    """
     if len(jogos) < 20:
         raise ValueError("Histórico curto demais para ajustar o modelo")
 
@@ -151,25 +197,21 @@ def ajustar(jogos: list[dict], xi: float = XI_DECAIMENTO) -> Modelo:
     ajuste = minimize(
         _verossimilhanca_negativa,
         chute,
-        args=(casa, fora, gols_casa, gols_fora, pesos, n_times),
+        args=(casa, fora, gols_casa, gols_fora, pesos, n_times, l2),
+        jac=True,
         method="L-BFGS-B",
         bounds=limites,
-        options={"maxiter": 250, "ftol": 1e-8},
+        options={"maxiter": 500, "ftol": 1e-10, "gtol": 1e-6},
     )
-    if not ajuste.success and ajuste.fun >= 1e11:
+    # Ponto inviável devolve 1e12 com gradiente zero, que o L-BFGS-B pode tomar por convergência.
+    if not np.isfinite(ajuste.fun) or ajuste.fun >= 1e11:
         raise RuntimeError(f"O modelo não convergiu: {ajuste.message}")
 
-    parametros = ajuste.x
-    ataque = np.zeros(n_times)
-    defesa = np.zeros(n_times)
-    ataque[:livres] = parametros[:livres]
-    ataque[livres] = -ataque[:livres].sum()
-    defesa[:livres] = parametros[livres : 2 * livres]
-    defesa[livres] = -defesa[:livres].sum()
+    ataque, defesa, mando, rho = _desempacotar(ajuste.x, n_times)
     return Modelo(
         times=times,
         ataque={time: float(ataque[pos]) for time, pos in indice.items()},
         defesa={time: float(defesa[pos]) for time, pos in indice.items()},
-        mando=float(parametros[-2]),
-        rho=float(parametros[-1]),
+        mando=mando,
+        rho=rho,
     )

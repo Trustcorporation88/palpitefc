@@ -8,6 +8,9 @@ from pathlib import Path
 
 PASTA = Path(__file__).resolve().parent.parent / "data"
 ARQUIVO = PASTA / "BRA.csv"
+# new_league_fixtures.csv só traz os jogos dos próximos dias, com a odd de
+# antes do fechamento. O football-data atualiza às terças e sextas.
+ARQUIVO_PROXIMOS = PASTA / "proximos.csv"
 
 NOMES = {
     "Athletico-PR": "Athletico-PR",
@@ -76,6 +79,31 @@ def carregar(caminho: Path = ARQUIVO) -> list[dict]:
                     "odd_casa": odd_casa,
                     "odd_empate": odd_empate,
                     "odd_fora": odd_fora,
+                }
+            )
+    jogos.sort(key=lambda jogo: jogo["quando"])
+    return jogos
+
+
+def carregar_proximos(caminho: Path = ARQUIVO_PROXIMOS) -> list[dict]:
+    """Jogos marcados da Série A. Arquivo ausente ou sem o Brasil: lista vazia."""
+    if not caminho.exists():
+        return []
+    jogos = []
+    with caminho.open(newline="", encoding="utf-8-sig") as arquivo:
+        for linha in csv.DictReader(arquivo):
+            if (linha.get("Country") or "").strip() != "Brazil" or (linha.get("League") or "").strip() != "Serie A":
+                continue
+            jogos.append(
+                {
+                    "quando": datetime.strptime(
+                        f"{linha['Date'].strip()} {linha['Time'].strip() or '00:00'}", "%d/%m/%Y %H:%M"
+                    ),
+                    "casa": linha["Home"].strip(),
+                    "fora": linha["Away"].strip(),
+                    "odd_casa": _odd(linha, "AvgH", "B365H", "MaxH"),
+                    "odd_empate": _odd(linha, "AvgD", "B365D", "MaxD"),
+                    "odd_fora": _odd(linha, "AvgA", "B365A", "MaxA"),
                 }
             )
     jogos.sort(key=lambda jogo: jogo["quando"])

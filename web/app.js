@@ -1,20 +1,38 @@
 const ACEITE = "palpitefc-termo-1.0";
 const ROTULOS = { casa: "Casa", empate: "Empate", fora: "Fora" };
+const PAGINAS = ["rodada", "tabela", "times", "simular", "conta"];
+const VERSAO = document.documentElement.dataset.versao || "";
 
 const miolo = document.querySelector("#miolo");
 const termo = document.querySelector("#termo");
 const site = document.querySelector("#site");
-let pagina = "rodada";
+const respostas = new Map();
 let inicio = null;
 let times = [];
+let pedidoInicial = null;
+let timeEscolhido = null;
+let confronto = null;
 
-function pct(valor) {
-  return `${Math.round(valor * 100)}%`;
+function esc(texto) {
+  return String(texto ?? "").replace(/[&<>"']/g, (letra) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[letra]);
+}
+
+function pct(valor, casas = 0) {
+  if (valor == null) return "–";
+  const numero = valor * 100;
+  if (numero <= 0) return "–";
+  if (casas === 0 && numero < 0.5) return "<1%";
+  if (casas === 0 && numero >= 99.5) return ">99%";
+  return `${numero.toFixed(casas).replace(".", ",")}%`;
+}
+
+function decimal(valor, casas = 3) {
+  return valor == null ? "–" : valor.toFixed(casas).replace(".", ",");
 }
 
 function quando(iso) {
   const [data, hora] = iso.split("T");
-  const [ano, mes, dia] = data.split("-");
+  const [, mes, dia] = data.split("-");
   return `${dia}/${mes} · ${hora}`;
 }
 
@@ -23,163 +41,508 @@ function dinheiro(valor) {
   return `${sinal}${valor.toFixed(1).replace(".", ",")} u`;
 }
 
-function cartao(jogo) {
-  const artigo = document.createElement("article");
-  artigo.className = "jogo";
+function api(caminho) {
+  if (!respostas.has(caminho)) {
+    const separador = caminho.includes("?") ? "&" : "?";
+    const pedido = fetch(`${caminho}${separador}v=${encodeURIComponent(VERSAO)}`).then((resposta) => {
+      if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+      return resposta.json();
+    });
+    pedido.catch(() => respostas.delete(caminho));
+    respostas.set(caminho, pedido);
+  }
+  return respostas.get(caminho);
+}
+
+function bloco(tag, classe, html) {
+  const elemento = document.createElement(tag);
+  if (classe) elemento.className = classe;
+  if (html != null) elemento.innerHTML = html;
+  return elemento;
+}
+
+function nomeDaLeitura(jogo) {
+  if (jogo.maisProvavel === "casa") return `vitória do ${jogo.casaNome}`;
+  if (jogo.maisProvavel === "fora") return `vitória do ${jogo.foraNome}`;
+  return "empate";
+}
+
+function cartao(jogo, rotulo = "Confronto restante") {
+  const artigo = bloco("article", "jogo");
   const resultado = jogo.resultado
     ? `<b class="placar">${jogo.resultado.casa}–${jogo.resultado.fora}</b>`
     : `<span>ainda não jogou</span>`;
-  const leitura = document.createElement("p");
-  leitura.className = "leitura";
-  const nomeLeitura =
-    jogo.maisProvavel === "casa"
-      ? `vitória do ${jogo.casaNome}`
-      : jogo.maisProvavel === "fora"
-        ? `vitória do ${jogo.foraNome}`
-        : "empate";
-  if (jogo.resultado) {
-    leitura.textContent = jogo.acertouMaisProvavel
-      ? `A leitura (${nomeLeitura}, ${pct(jogo.chance[jogo.maisProvavel])}) acertou o 1X2.`
-      : `A leitura era ${nomeLeitura}, ${pct(jogo.chance[jogo.maisProvavel])}. Não saiu.`;
-    leitura.classList.add(jogo.acertouMaisProvavel ? "ok" : "erro");
-  } else {
-    leitura.textContent = `Leitura: ${nomeLeitura}, ${pct(jogo.chance[jogo.maisProvavel])}. Sem odd, sem palpite de aposta.`;
-  }
+  const comMercado = Boolean(jogo.mercado);
+  const barras = ["casa", "empate", "fora"]
+    .map((mercado) => {
+      const classe = mercado === jogo.maisProvavel ? "destaque" : "";
+      const saiu = jogo.resultado && jogo.resultado.mercado === mercado ? " saiu" : "";
+      const odd = comMercado
+        ? `<div class="trilho fino" title="Odd sem margem"><i style="width:${(jogo.mercado[mercado] * 100).toFixed(1)}%"></i></div>`
+        : "";
+      const valorOdd = comMercado ? `<small>${pct(jogo.mercado[mercado])}</small>` : "";
+      return `<div class="linha-mercado ${classe}${saiu}">
+        <span>${ROTULOS[mercado]}</span>
+        <div class="trilhos"><div class="trilho"><i style="width:${(jogo.chance[mercado] * 100).toFixed(1)}%"></i></div>${odd}</div>
+        <span class="valor">${pct(jogo.chance[mercado])}${valorOdd}</span>
+      </div>`;
+    })
+    .join("");
 
   artigo.innerHTML = `
-    <header><span>${jogo.quando ? quando(jogo.quando) : "Confronto restante"}</span>${resultado}</header>
+    <header><span>${jogo.quando ? quando(jogo.quando) : rotulo}</span>${resultado}</header>
     <div class="confronto">
-      <div><b>${jogo.casaNome}</b><small>${jogo.golsEsperados.casa.toFixed(2).replace(".", ",")} gols</small></div>
-      <div class="x">×</div>
-      <div><b>${jogo.foraNome}</b><small>${jogo.golsEsperados.fora.toFixed(2).replace(".", ",")} gols</small></div>
+      <div><b>${esc(jogo.casaNome)}</b><small>${decimal(jogo.golsEsperados.casa, 2)} gols esperados</small></div>
+      <div class="x" aria-hidden="true">×</div>
+      <div><b>${esc(jogo.foraNome)}</b><small>${decimal(jogo.golsEsperados.fora, 2)} gols esperados</small></div>
     </div>
-    <div class="barras">
-      ${["casa", "empate", "fora"]
-        .map((mercado) => {
-          const classe = mercado === jogo.maisProvavel ? "destaque" : "";
-          return `<div class="linha-mercado ${classe}"><span>${ROTULOS[mercado]}</span><div class="trilho"><i style="width:${pct(jogo.chance[mercado])}"></i></div><span>${pct(jogo.chance[mercado])}</span></div>`;
-        })
-        .join("")}
-    </div>
-    <div class="extra"><span>Ambos marcam ${pct(jogo.chance.ambos)}</span><span>Mais de 2,5 ${pct(jogo.chance.mais25)}</span></div>
-    <ol class="placares">
-      ${jogo.placares
-        .map((placar) => `<li>${placar.casa}–${placar.fora} · ${pct(placar.chance)}</li>`)
-        .join("")}
+    <div class="barras">${barras}</div>
+    ${comMercado ? `<p class="legenda"><i class="ponto modelo"></i>modelo <i class="ponto odd"></i>odd sem margem</p>` : ""}
+    <div class="extra"><span>Ambos marcam ${pct(jogo.chance.ambos)}</span><span>Mais de 2,5 gols ${pct(jogo.chance.mais25)}</span></div>
+    <ol class="placares" aria-label="Placares mais prováveis">
+      ${jogo.placares.map((placar) => `<li>${placar.casa}–${placar.fora} · ${pct(placar.chance)}</li>`).join("")}
     </ol>`;
+
+  const leitura = bloco("p", "leitura");
+  const chance = pct(jogo.chance[jogo.maisProvavel]);
+  if (jogo.resultado) {
+    leitura.textContent = jogo.acertouMaisProvavel
+      ? `A leitura (${nomeDaLeitura(jogo)}, ${chance}) acertou o 1X2.`
+      : `A leitura era ${nomeDaLeitura(jogo)}, ${chance}. Não saiu.`;
+    leitura.classList.add(jogo.acertouMaisProvavel ? "ok" : "erro");
+  } else {
+    leitura.textContent = `Leitura: ${nomeDaLeitura(jogo)}, ${chance}. Não é palpite de aposta.`;
+  }
   artigo.append(leitura);
   return artigo;
 }
 
-function hero(resumo) {
-  const bloco = document.createElement("section");
-  bloco.className = "hero";
-  bloco.innerHTML = `
-    <p class="olho">Última rodada conferida antes do apito</p>
+function heroRodada(resumo) {
+  const notas = resumo.notas;
+  return bloco(
+    "section",
+    "hero",
+    `<p class="olho">Atualizado até ${quando(inicio.atualizadoEm)}</p>
     <h2>A chance do jogo, não uma aposta</h2>
-    <p>Em ${resumo.jogos} jogos de 2026, a leitura mais provável acertou ${pct(resumo.taxaMaisProvavel)}. O favorito da odd acertou ${pct(resumo.taxaFavorito)}. A regra de marcar vantagem sobre a odd foi desligada: ela perdeu dinheiro.</p>
+    <p>Em ${resumo.jogos} jogos de 2026, calculados antes do apito, a leitura mais provável acertou ${pct(resumo.taxaMaisProvavel)} e o favorito da odd acertou ${pct(resumo.taxaFavorito)}. Na nota RPS, em que menor é melhor, a odd sem margem ficou em ${decimal(notas.mercado?.rps)} e o modelo em ${decimal(notas.modelo?.rps)}. Chutar pela média dá ${decimal(notas.base?.rps)}.</p>
     <div class="numeros">
       <div class="numero"><b>${pct(resumo.taxaMaisProvavel)}</b><span>acerto da leitura</span></div>
       <div class="numero"><b>${pct(resumo.taxaFavorito)}</b><span>acerto do favorito da odd</span></div>
-    </div>`;
-  return bloco;
+    </div>`,
+  );
 }
 
 async function paginaRodada() {
-  miolo.replaceChildren(hero(inicio.resumo));
-  const titulo = document.createElement("h2");
-  titulo.textContent = "Última rodada";
-  miolo.append(titulo);
-  inicio.rodada.forEach((jogo) => miolo.append(cartao(jogo)));
+  const pedacos = [heroRodada(inicio.resumo)];
+  if (inicio.proximos?.length) {
+    pedacos.push(
+      bloco("h2", "", "Próximos jogos"),
+      bloco(
+        "p",
+        "nota",
+        "A barra azul é a chance da casa de aposta sem a margem. Quando o modelo e a odd discordam, a conferência de 2026 mostra que a odd costuma estar mais perto. Não é palpite de aposta.",
+      ),
+    );
+    inicio.proximos.forEach((jogo) => pedacos.push(cartao(jogo)));
+  }
+  pedacos.push(bloco("h2", "", "Última rodada"));
+  inicio.rodada.forEach((jogo) => pedacos.push(cartao(jogo)));
+  miolo.replaceChildren(...pedacos);
+}
+
+function celulaChance(valor, tom) {
+  const forca = Math.min(1, valor || 0);
+  return `<td class="chance ${tom}" style="--forca:${forca.toFixed(3)}">${pct(valor)}</td>`;
+}
+
+const TONS = {
+  titulo: "tom-ouro",
+  libertadores: "tom-lima",
+  prelibertadores: "tom-ciano",
+  sulamericana: "tom-azul",
+  rebaixamento: "tom-erro",
+};
+
+function zonaDaPosicao(zonas, posicao) {
+  return zonas.find((zona) => zona.id !== "titulo" && posicao >= zona.de && posicao <= zona.ate);
+}
+
+function faixa(zona) {
+  return zona.de === zona.ate ? `${zona.de}º` : `${zona.de}º a ${zona.ate}º`;
+}
+
+function impacto(jogo) {
+  const efeitos = jogo.efeitos
+    .map(
+      (efeito) =>
+        `<li><b>${esc(efeito.nome)}</b> · ${esc(efeito.zonaNome.toLowerCase())}: ${pct(efeito.hoje)} hoje, <span class="pos">${pct(efeito.seVencer)}</span> se vencer, <span class="neg">${pct(efeito.sePerder)}</span> se perder</li>`,
+    )
+    .join("");
+  return `<li class="impacto"><p><b>${esc(jogo.casaNome)} × ${esc(jogo.foraNome)}</b><small>${pct(jogo.chance.casa)} · ${pct(jogo.chance.empate)} · ${pct(jogo.chance.fora)}</small></p><ul>${efeitos}</ul></li>`;
+}
+
+async function paginaTabela() {
+  const [dados, forca] = await Promise.all([api("/api/tabela"), api("/api/forca")]);
+  const zonas = dados.zonas;
+  const classificacao = dados.times
+    .map((time) => {
+      const zona = zonaDaPosicao(zonas, time.posicao);
+      const marca = zona ? TONS[zona.id] : "";
+      return `<tr><td class="pos ${marca}">${time.posicao}</td><td>${esc(time.nome)}</td><td><b>${time.pts}</b></td><td>${time.j}</td><td>${time.v}</td><td>${time.sg > 0 ? "+" : ""}${time.sg}</td></tr>`;
+    })
+    .join("");
+  const chances = dados.times
+    .map(
+      (time) =>
+        `<tr><td>${esc(time.nome)}</td><td>${decimal(time.pontosEsperados, 0)}<small> (${time.pontosFaixa[0]}–${time.pontosFaixa[1]})</small></td>${zonas
+          .map((zona) => celulaChance(time.zonas[zona.id], TONS[zona.id]))
+          .join("")}</tr>`,
+    )
+    .join("");
+  const linhasForca = forca.times
+    .map((time) => {
+      const ataque = time.ataque * 100;
+      const defesa = time.defesa * 100;
+      return `<tr><td>${esc(time.nome)}</td><td class="${ataque >= 0 ? "pos" : "neg"}">${ataque >= 0 ? "+" : ""}${ataque.toFixed(0)}%</td><td class="${defesa <= 0 ? "pos" : "neg"}">${defesa >= 0 ? "+" : ""}${defesa.toFixed(0)}%</td></tr>`;
+    })
+    .join("");
+
+  miolo.replaceChildren(
+    bloco(
+      "section",
+      "painel",
+      `<h2>Classificação</h2>
+      <p class="nota">Jogos até ${quando(dados.atualizadoEm)}. Desempate: pontos, vitórias, saldo e gols marcados.</p>
+      <table class="tabela"><thead><tr><th>#</th><th>Time</th><th>Pts</th><th>J</th><th>V</th><th>SG</th></tr></thead><tbody>${classificacao}</tbody></table>
+      <p class="legenda-zonas">${zonas
+        .filter((zona) => zona.id !== "titulo")
+        .map((zona) => `<span><i class="ponto ${TONS[zona.id]}"></i>${esc(zona.nome)} (${faixa(zona)})</span>`)
+        .join("")}</p>`,
+    ),
+    bloco(
+      "section",
+      "painel",
+      `<h2>Chance no fim do campeonato</h2>
+      <p class="nota">Os ${dados.jogosRestantes} jogos que faltam foram sorteados ${dados.simulacoes.toLocaleString("pt-BR")} vezes com a mesma tabela de placares do modelo. A faixa de pontos vale para 90% das simulações. As vagas seguem a regra de 2026 pela posição; a CBF passa a vaga adiante quando um campeão de copa já está classificado.</p>
+      <div class="rolagem"><table class="tabela chances"><thead><tr><th>Time</th><th>Pts no fim</th>${zonas
+        .map((zona) => `<th title="${esc(zona.nome)} (${faixa(zona)})">${esc(zona.curto)}</th>`)
+        .join("")}</tr></thead><tbody>${chances}</tbody></table></div>`,
+    ),
+    bloco(
+      "section",
+      "painel",
+      `<h2>Jogos que mais mexem na tabela</h2>
+      <p class="nota">Compara as simulações em que cada time venceu com as que ele perdeu. A ordem é pelo tamanho da mudança, não pela data do jogo.</p>
+      <ol class="impactos">${(dados.impacto || []).map(impacto).join("")}</ol>`,
+    ),
+    bloco(
+      "section",
+      "painel",
+      `<h2>Força no campeonato</h2>
+      <p class="nota">Ataque é quanto o time marca a mais que a média. Defesa é quanto ele sofre a mais: número negativo é defesa boa. O mando de campo entra à parte, em todo jogo.</p>
+      <table class="tabela forca"><thead><tr><th>Time</th><th>Ataque</th><th>Defesa</th></tr></thead><tbody>${linhasForca}</tbody></table>`,
+    ),
+  );
+}
+
+function seletor(rotulo, id, escolhido) {
+  const opcoes = times
+    .map((time) => `<option value="${esc(time.id)}"${time.id === escolhido ? " selected" : ""}>${esc(time.nome)}</option>`)
+    .join("");
+  return `<label class="campo">${rotulo}<select id="${id}">${opcoes}</select></label>`;
+}
+
+function resumoDoTime(linha, zonas) {
+  if (!linha) return "";
+  const maior = Math.max(...linha.posicoes);
+  const barras = linha.posicoes
+    .map((chance, posicao) => {
+      const zona = zonaDaPosicao(zonas, posicao + 1);
+      const altura = chance > 0 ? Math.max(3, (chance / maior) * 100) : 0;
+      return `<div class="coluna ${zona ? TONS[zona.id] : ""}" title="${posicao + 1}º: ${pct(chance, 1)}"><i style="height:${altura.toFixed(1)}%"></i><span>${posicao + 1}</span></div>`;
+    })
+    .join("");
+  return `
+    <div class="numeros tres">
+      <div class="numero"><b>${linha.posicao}º</b><span>${linha.pts} pontos em ${linha.j} jogos</span></div>
+      <div class="numero"><b>${decimal(linha.pontosEsperados, 0)}</b><span>pontos esperados no fim</span></div>
+      <div class="numero"><b>${pct(linha.zonas.rebaixamento)}</b><span>chance de cair</span></div>
+    </div>
+    <p class="nota">${zonas
+      .filter((zona) => zona.id !== "rebaixamento")
+      .map((zona) => `${esc(zona.nome)} ${pct(linha.zonas[zona.id])}`)
+      .join(" · ")}</p>
+    <div class="distribuicao" role="img" aria-label="Chance de terminar em cada posição">${barras}</div>
+    <p class="nota pequeno">Chance de terminar em cada posição, do 1º ao 20º.</p>`;
 }
 
 async function paginaTimes() {
-  const painelEl = document.createElement("section");
-  painelEl.className = "painel";
-  painelEl.innerHTML = `
-    <h2>Confrontos que ainda faltam</h2>
-    <p class="nota">${inicio.restantes} jogos do turno e returno ainda não aconteceram. A chance é de hoje. Não há odd futura nesta base, então não há palpite de aposta.</p>
-    <label class="campo">Time<select id="escolha-time"></select></label>`;
-  miolo.replaceChildren(painelEl);
+  if (!timeEscolhido) timeEscolhido = times[0]?.id;
+  const painelEl = bloco(
+    "section",
+    "painel",
+    `<h2>Time a time</h2>
+    <p class="nota">Os ${inicio.restantes} jogos que faltam no turno e returno, com a chance de hoje. Não há odd futura nesta base, então não há comparação com a casa de aposta.</p>
+    ${seletor("Time", "escolha-time", timeEscolhido)}
+    <div id="resumo-time"></div>`,
+  );
+  const lista = bloco("div", "");
+  miolo.replaceChildren(painelEl, lista);
   const select = painelEl.querySelector("select");
-  times.forEach((time) => {
-    const opcao = document.createElement("option");
-    opcao.value = time.id;
-    opcao.textContent = time.nome;
-    select.append(opcao);
-  });
-  const lista = document.createElement("div");
-  miolo.append(lista);
+  const tabela = await api("/api/tabela");
   const carregar = async () => {
-    const resposta = await fetch(`/api/time/${encodeURIComponent(select.value)}`);
-    const dados = await resposta.json();
-    lista.replaceChildren();
-    dados.jogos.forEach((jogo) => lista.append(cartao(jogo)));
+    timeEscolhido = select.value;
+    const dados = await api(`/api/time/${encodeURIComponent(select.value)}`);
+    painelEl.querySelector("#resumo-time").innerHTML = resumoDoTime(dados.tabela, tabela.zonas);
+    lista.replaceChildren(...dados.jogos.map((jogo) => cartao(jogo)));
   };
   select.addEventListener("change", carregar);
   await carregar();
 }
 
-async function paginaForca() {
-  const resposta = await fetch("/api/forca");
-  const dados = await resposta.json();
-  const painelEl = document.createElement("section");
-  painelEl.className = "painel";
-  const linhas = dados.times
-    .map((time) => {
-      const ataque = time.ataque * 100;
-      const defesa = time.defesa * 100;
-      const classeAtaque = ataque >= 0 ? "pos" : "neg";
-      const classeDefesa = defesa <= 0 ? "pos" : "neg";
-      return `<tr><td>${time.nome}</td><td class="${classeAtaque}">${ataque >= 0 ? "+" : ""}${ataque.toFixed(0)}%</td><td class="${classeDefesa}">${defesa >= 0 ? "+" : ""}${defesa.toFixed(0)}%</td></tr>`;
-    })
+function gradeDePlacares(jogo) {
+  const maior = Math.max(...jogo.grade.flat());
+  const cabeca = jogo.grade[0].map((_, coluna) => `<th>${coluna}</th>`).join("");
+  const linhas = jogo.grade
+    .map(
+      (linha, golsCasa) =>
+        `<tr><th>${golsCasa}</th>${linha
+          .map((chance) => `<td style="--forca:${(chance / maior).toFixed(3)}">${pct(chance, 1)}</td>`)
+          .join("")}</tr>`,
+    )
     .join("");
-  painelEl.innerHTML = `
-    <h2>Força no campeonato</h2>
-    <p class="nota">Ataque é quanto o time marca a mais que a média. Defesa é quanto ele sofre a mais: número negativo é defesa boa. Mando de campo entra à parte, em todo jogo.</p>
-    <table class="forca"><thead><tr><th>Time</th><th>Ataque</th><th>Defesa</th></tr></thead><tbody>${linhas}</tbody></table>`;
-  miolo.replaceChildren(painelEl);
+  return `<div class="rolagem"><table class="grade" aria-label="Chance de cada placar">
+    <caption>Linhas: gols do ${esc(jogo.casaNome)} · colunas: gols do ${esc(jogo.foraNome)}</caption>
+    <thead><tr><th></th>${cabeca}</tr></thead><tbody>${linhas}</tbody></table></div>`;
 }
 
-function paginaConta() {
-  const resumo = inicio.resumo;
-  const painelEl = document.createElement("section");
-  painelEl.className = "painel";
-  painelEl.innerHTML = `
-    <h2>O que a conta fez em 2026</h2>
-    <p class="nota">Cada jogo foi calculado só com o que já tinha acontecido. O modelo é o Dixon-Coles: gols de cada time, mando de campo e mais peso para o jogo recente. Todos os mercados saem da mesma tabela de placares.</p>
-    <div class="numeros">
-      <div class="numero"><b>${resumo.jogos}</b><span>jogos conferidos</span></div>
-      <div class="numero"><b>${resumo.acertosMaisProvavel}</b><span>leituras certas no 1X2</span></div>
-      <div class="numero"><b>${pct(resumo.taxaFavorito)}</b><span>favorito da odd</span></div>
-      <div class="numero"><b>${dinheiro(resumo.lucroFavorito)}</b><span>seguir a odd, 1 unidade</span></div>
-      <div class="numero"><b>${resumo.palpites}</b><span>vantagens marcadas</span></div>
-      <div class="numero"><b>${dinheiro(resumo.lucroPalpite)}</b><span>seguir a vantagem</span></div>
-    </div>
-    <p class="nota">A vantagem era marcada quando a chance do modelo, na odd média, prometia mais de 3% de retorno. Ela acertou ${pct(resumo.taxaPalpite)} e perdeu dinheiro. A odd favorita também perde, porque a casa fica com a margem, mas perde menos. Por isso o site mostra a chance e não marca aposta.</p>
-    <p class="nota">Um acerto passado não vale para o próximo jogo. Toda combinação continua incerta.</p>`;
-  miolo.replaceChildren(painelEl);
+async function paginaSimular() {
+  if (!confronto) confronto = { casa: times[0]?.id, fora: times[1]?.id };
+  const painelEl = bloco(
+    "section",
+    "painel",
+    `<h2>Simular um confronto</h2>
+    <p class="nota">Escolha quem joga em casa e quem visita. A chance usa a força de hoje e o mando de campo.</p>
+    <div class="dupla">${seletor("Mandante", "sim-casa", confronto.casa)}<button type="button" class="trocar" aria-label="Inverter mando">⇄</button>${seletor("Visitante", "sim-fora", confronto.fora)}</div>`,
+  );
+  const saida = bloco("div", "");
+  miolo.replaceChildren(painelEl, saida);
+  const casa = painelEl.querySelector("#sim-casa");
+  const fora = painelEl.querySelector("#sim-fora");
+  const calcular = async () => {
+    confronto = { casa: casa.value, fora: fora.value };
+    if (casa.value === fora.value) {
+      saida.replaceChildren(bloco("p", "vazio", "Escolha dois times diferentes."));
+      return;
+    }
+    const jogo = await api(`/api/simular?casa=${encodeURIComponent(casa.value)}&fora=${encodeURIComponent(fora.value)}`);
+    const extra = bloco(
+      "section",
+      "painel",
+      `<h2>Placar a placar</h2>${gradeDePlacares(jogo)}
+      <div class="numeros tres">
+        <div class="numero"><b>${pct(jogo.chance.mais15)}</b><span>mais de 1,5 gols</span></div>
+        <div class="numero"><b>${pct(jogo.chance.mais25)}</b><span>mais de 2,5 gols</span></div>
+        <div class="numero"><b>${pct(jogo.chance.mais35)}</b><span>mais de 3,5 gols</span></div>
+      </div>`,
+    );
+    saida.replaceChildren(cartao(jogo, "Simulação com a força de hoje"), extra);
+  };
+  casa.addEventListener("change", calcular);
+  fora.addEventListener("change", calcular);
+  painelEl.querySelector(".trocar").addEventListener("click", () => {
+    [casa.value, fora.value] = [fora.value, casa.value];
+    calcular();
+  });
+  await calcular();
 }
 
-const PAGINAS = {
+function graficoLinhas(serie) {
+  const largura = 640;
+  const altura = 220;
+  const margem = { esquerda: 46, direita: 12, topo: 12, base: 28 };
+  const valores = serie.flatMap((ponto) => [ponto.modelo, ponto.mercado]).filter((valor) => valor != null);
+  const minimo = Math.min(...valores) - 0.004;
+  const maximo = Math.max(...valores) + 0.004;
+  const x = (indice) => margem.esquerda + (indice / Math.max(1, serie.length - 1)) * (largura - margem.esquerda - margem.direita);
+  const y = (valor) => margem.topo + (1 - (valor - minimo) / (maximo - minimo)) * (altura - margem.topo - margem.base);
+  const caminho = (chave) =>
+    serie
+      .map((ponto, indice) => (ponto[chave] == null ? null : `${x(indice).toFixed(1)},${y(ponto[chave]).toFixed(1)}`))
+      .filter(Boolean)
+      .join(" ");
+  const marcas = [minimo + 0.004, (minimo + maximo) / 2, maximo - 0.004]
+    .map(
+      (valor) =>
+        `<line x1="${margem.esquerda}" x2="${largura - margem.direita}" y1="${y(valor)}" y2="${y(valor)}" class="guia"/><text x="${margem.esquerda - 6}" y="${y(valor) + 4}" text-anchor="end">${decimal(valor)}</text>`,
+    )
+    .join("");
+  const ultimo = serie.at(-1);
+  return `<svg viewBox="0 0 ${largura} ${altura}" class="grafico" role="img" aria-label="RPS acumulado na temporada: modelo ${decimal(ultimo.modelo)}, odd sem margem ${decimal(ultimo.mercado)}">
+    ${marcas}
+    <text x="${margem.esquerda}" y="${altura - 8}">${quando(serie[0].inicio).split(" ·")[0]}</text>
+    <text x="${largura - margem.direita}" y="${altura - 8}" text-anchor="end">${quando(ultimo.inicio).split(" ·")[0]}</text>
+    <polyline points="${caminho("mercado")}" class="serie odd"/>
+    <polyline points="${caminho("modelo")}" class="serie modelo"/>
+  </svg>`;
+}
+
+function graficoCalibracao(calibracao) {
+  const lado = 300;
+  const margem = 34;
+  const folga = 10;
+  const util = lado - margem - folga;
+  const escala = (valor) => margem + valor * util;
+  const inverter = (valor) => lado - margem - valor * util;
+  const rotulo = (valor) => `${Math.round(valor * 100)}%`;
+  const pontos = (linhas, classe) =>
+    `<polyline class="serie ${classe}" points="${linhas.map((linha) => `${escala(linha.prevista).toFixed(1)},${inverter(linha.observada).toFixed(1)}`).join(" ")}"/>` +
+    linhas
+      .map(
+        (linha) =>
+          `<circle class="${classe}" cx="${escala(linha.prevista).toFixed(1)}" cy="${inverter(linha.observada).toFixed(1)}" r="${Math.min(7, 2 + Math.sqrt(linha.casos) / 4).toFixed(1)}"><title>Previsto ${pct(linha.prevista)}, aconteceu ${pct(linha.observada)} (${linha.casos} casos)</title></circle>`,
+      )
+      .join("");
+  const marcas = [0, 0.25, 0.5, 0.75, 1]
+    .map(
+      (valor) =>
+        `<text x="${escala(valor)}" y="${lado - margem + 18}" text-anchor="middle">${rotulo(valor)}</text><text x="${margem - 6}" y="${inverter(valor) + 4}" text-anchor="end">${rotulo(valor)}</text>`,
+    )
+    .join("");
+  return `<svg viewBox="0 0 ${lado} ${lado}" class="grafico quadrado" role="img" aria-label="Calibração: chance prevista contra frequência observada">
+    <line class="diagonal" x1="${escala(0)}" y1="${inverter(0)}" x2="${escala(1)}" y2="${inverter(1)}"/>
+    ${marcas}
+    ${pontos(calibracao.mercado, "odd")}
+    ${pontos(calibracao.modelo, "modelo")}
+  </svg>`;
+}
+
+function diferenca(dados) {
+  if (!dados) return "";
+  const [baixo, alto] = dados.ic95;
+  const quem = dados.media > 0 ? "a odd foi melhor" : "o modelo foi melhor";
+  const certeza =
+    baixo > 0 || alto < 0
+      ? "A diferença não se explica por sorte na amostra."
+      : "Com esse número de jogos, a diferença ainda pode ser sorte.";
+  return `<p class="nota">Jogo a jogo, ${quem} por ${decimal(Math.abs(dados.media), 4)} de RPS (intervalo de 95%: ${decimal(baixo, 4)} a ${decimal(alto, 4)}). ${certeza}</p>`;
+}
+
+async function paginaConta() {
+  const dados = await api("/api/conta");
+  const resumo = dados.resumo;
+  const notas = resumo.notas;
+  const config = dados.config || {};
+  const linhaNota = (rotulo, nota) =>
+    `<tr><td>${rotulo}</td><td>${decimal(nota?.rps)}</td><td>${decimal(nota?.brier)}</td><td>${decimal(nota?.logLoss)}</td></tr>`;
+  miolo.replaceChildren(
+    bloco(
+      "section",
+      "painel",
+      `<h2>O que a conta fez em ${esc(dados.temporada)}</h2>
+      <p class="nota">Cada jogo foi calculado só com o que já tinha acontecido. O modelo é o Dixon-Coles: gols de cada time, mando de campo e mais peso para o jogo recente. Todos os mercados saem da mesma tabela de placares.</p>
+      <table class="tabela notas"><thead><tr><th>Previsão</th><th>RPS</th><th>Brier</th><th>Log loss</th></tr></thead><tbody>
+        ${linhaNota("Odd sem margem", notas.mercado)}
+        ${linhaNota("Modelo", notas.modeloMesmosJogos)}
+        ${linhaNota("Média da liga", notas.base)}
+      </tbody></table>
+      <p class="nota">Menor é melhor nas três notas. O RPS é a nota padrão do futebol porque leva a ordem em conta: dar o empate quando a casa vence erra menos do que dar o visitante. A odd de fechamento é o adversário mais difícil que existe; o modelo teve nota melhor do que ela em ${notas.jogosModeloMelhor} dos ${notas.jogosComMercado} jogos.</p>
+      ${diferenca(notas.diferencaRps)}
+      <p class="nota pequeno">Para comparar: no Brasileirão 2021, um estudo da FGV mediu RPS de 0,205 para a casa de aposta, 0,205 para o FiveThirtyEight, 0,210 para o Chance de Gol e 0,218 para o modelo da UFMG.</p>`,
+    ),
+    bloco(
+      "section",
+      "painel",
+      `<h2>RPS acumulado na temporada</h2>
+      <p class="nota">Cada ponto fecha um bloco de jogos sem pausa de mais de 36 horas. Quanto mais baixo, melhor.</p>
+      ${graficoLinhas(dados.serie)}
+      <p class="legenda"><i class="ponto modelo"></i>modelo <i class="ponto odd"></i>odd sem margem</p>`,
+    ),
+    bloco(
+      "section",
+      "painel",
+      `<h2>Calibração</h2>
+      <p class="nota">Quando a conta diz 40%, o resultado precisa acontecer perto de 4 vezes em 10. Ponto em cima da linha tracejada é chance bem calibrada.</p>
+      ${graficoCalibracao(resumo.calibracao)}
+      <p class="legenda"><i class="ponto modelo"></i>modelo <i class="ponto odd"></i>odd sem margem · tamanho do ponto = número de casos</p>`,
+    ),
+    bloco(
+      "section",
+      "painel",
+      `<h2>Acerto e dinheiro</h2>
+      <div class="numeros">
+        <div class="numero"><b>${resumo.jogos}</b><span>jogos conferidos</span></div>
+        <div class="numero"><b>${resumo.acertosMaisProvavel}</b><span>leituras certas no 1X2</span></div>
+        <div class="numero"><b>${pct(resumo.taxaFavorito)}</b><span>favorito da odd</span></div>
+        <div class="numero"><b>${dinheiro(resumo.lucroFavorito)}</b><span>seguir a odd, 1 unidade</span></div>
+        <div class="numero"><b>${resumo.palpites}</b><span>vantagens que seriam marcadas</span></div>
+        <div class="numero"><b>${dinheiro(resumo.lucroPalpite)}</b><span>seguir a vantagem</span></div>
+      </div>
+      <p class="nota">A vantagem seria marcada quando a chance do modelo, na odd média, prometesse mais de 3% de retorno. Ela acertou ${pct(resumo.taxaPalpite)} e perdeu dinheiro. A odd favorita também perde, porque a casa fica com a margem, mas perde menos. Por isso o site mostra a chance e não marca aposta.</p>
+      <p class="nota">Um acerto passado não vale para o próximo jogo. Toda combinação continua incerta.</p>`,
+    ),
+    bloco(
+      "section",
+      "painel",
+      `<h2>Como o modelo foi regulado</h2>
+      <p class="nota">Peso do jogo antigo: cai ${decimal((1 - Math.exp(-(config.xi || 0) * 365)) * 100, 0)}% por ano (xi = ${String(config.xi).replace(".", ",")}). Puxão para a média: ${config.l2}, que segura o time recém-promovido com poucos jogos na base. Janela: ${config.janelaDias} dias. Os dois números foram escolhidos pelo menor RPS em 2024 e 2025; 2026 ficou de fora da escolha e serve de prova. A odd perde a margem pelo método de Shin.</p>
+      <p class="nota pequeno">Conta gerada em ${esc(dados.geradoEm.replace("T", " "))}.</p>`,
+    ),
+  );
+}
+
+const MONTAR = {
   rodada: paginaRodada,
+  tabela: paginaTabela,
   times: paginaTimes,
-  forca: paginaForca,
+  simular: paginaSimular,
   conta: paginaConta,
 };
 
+function rotaAtual() {
+  const nome = location.hash.replace("#", "");
+  return PAGINAS.includes(nome) ? nome : "rodada";
+}
+
 async function abrir(nome) {
-  pagina = nome;
   document.querySelectorAll(".menu button").forEach((botao) => {
-    botao.classList.toggle("ativa", botao.dataset.pag === nome);
+    const ativa = botao.dataset.pag === nome;
+    botao.classList.toggle("ativa", ativa);
+    if (ativa) botao.setAttribute("aria-current", "page");
+    else botao.removeAttribute("aria-current");
   });
-  miolo.innerHTML = `<p class="vazio">Carregando...</p>`;
-  await PAGINAS[nome]();
+  miolo.replaceChildren(bloco("p", "vazio", "Carregando..."));
+  try {
+    await dadosProntos();
+    await MONTAR[nome]();
+  } catch (erro) {
+    const aviso = bloco("div", "painel", `<p class="vazio">Não deu para carregar agora. Confira a conexão e tente de novo.</p><button type="button" class="botao">Tentar de novo</button>`);
+    aviso.querySelector("button").addEventListener("click", () => abrir(nome));
+    miolo.replaceChildren(aviso);
+    console.error(erro);
+  }
+  window.scrollTo({ top: 0 });
 }
 
 function liberar() {
   termo.hidden = true;
   site.hidden = false;
+}
+
+function lerAceite() {
+  try {
+    return localStorage.getItem(ACEITE);
+  } catch {
+    return null;
+  }
+}
+
+function gravarAceite() {
+  try {
+    localStorage.setItem(ACEITE, new Date().toISOString());
+  } catch {
+    // Sem armazenamento, o termo volta na próxima visita.
+  }
 }
 
 document.querySelectorAll("#form-termo input").forEach((caixa) => {
@@ -189,32 +552,43 @@ document.querySelectorAll("#form-termo input").forEach((caixa) => {
   });
 });
 
-document.querySelector("#form-termo").addEventListener("submit", async (evento) => {
+document.querySelector("#form-termo").addEventListener("submit", (evento) => {
   evento.preventDefault();
-  localStorage.setItem(ACEITE, new Date().toISOString());
+  gravarAceite();
   liberar();
-  await dadosProntos;
-  abrir("rodada");
+  abrir(rotaAtual());
 });
 
 document.querySelectorAll(".menu button").forEach((botao) => {
-  botao.addEventListener("click", () => abrir(botao.dataset.pag));
+  botao.addEventListener("click", () => {
+    if (rotaAtual() === botao.dataset.pag) abrir(botao.dataset.pag);
+    else location.hash = botao.dataset.pag;
+  });
 });
 
-const dadosProntos = Promise.all([
-  fetch("/api/inicio").then((resposta) => resposta.json()),
-  fetch("/api/times").then((resposta) => resposta.json()).then((dados) => dados.times),
-]).then(([painelInicial, listaTimes]) => {
-  inicio = painelInicial;
-  times = listaTimes;
+window.addEventListener("hashchange", () => {
+  if (!site.hidden) abrir(rotaAtual());
 });
 
-async function comecar() {
-  if (localStorage.getItem(ACEITE)) liberar();
-  else termo.hidden = false;
-  await dadosProntos;
-  if (termo.hidden === false) return;
-  abrir("rodada");
+function dadosProntos() {
+  // Se o pedido falhar (deploy reiniciando, rede ruim), o próximo "Tentar de novo" pede outra vez.
+  if (!pedidoInicial) {
+    pedidoInicial = Promise.all([api("/api/inicio"), api("/api/times").then((dados) => dados.times)])
+      .then(([painelInicial, listaTimes]) => {
+        inicio = painelInicial;
+        times = listaTimes;
+      })
+      .catch((erro) => {
+        pedidoInicial = null;
+        throw erro;
+      });
+  }
+  return pedidoInicial;
 }
 
-comecar();
+if (lerAceite()) {
+  liberar();
+  abrir(rotaAtual());
+} else {
+  termo.hidden = false;
+}

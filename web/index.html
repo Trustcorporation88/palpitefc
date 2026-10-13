@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-versao="{{versao}}">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,7 +8,13 @@
       name="description"
       content="Chance estatística dos jogos do Brasileirão. Não é casa de aposta, não recebe valor e não garante acerto."
     />
-    <link rel="stylesheet" href="/static/estilos.css?v=2" />
+    <meta name="theme-color" content="#101712" />
+    <meta property="og:title" content="PalpiteFC — chance do jogo, sem aposta" />
+    <meta property="og:description" content="Chance de cada jogo, tabela e chance de título, vaga e rebaixamento no Brasileirão 2026. Sem aposta e sem garantia." />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="pt_BR" />
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/estilos.css?v={{versao}}" />
   </head>
   <body>
     <div id="termo" class="termo" hidden>
@@ -53,19 +59,20 @@
         </div>
         <p class="selo">Sem aposta · sem garantia</p>
       </header>
-      <main id="miolo"></main>
+      <main id="miolo" aria-live="polite"></main>
       <footer class="aviso">
         Ferramenta de chance estatística. Não é casa de aposta, não recebe valor, não garante
         resultado e não tem vínculo com operador de apostas. Proibido para menores de 18 anos.
         Resultados e odds: football-data.co.uk.
       </footer>
-      <nav class="menu">
+      <nav class="menu" aria-label="Páginas">
         <button type="button" data-pag="rodada">Rodada</button>
+        <button type="button" data-pag="tabela">Tabela</button>
         <button type="button" data-pag="times">Times</button>
-        <button type="button" data-pag="forca">Força</button>
+        <button type="button" data-pag="simular">Simular</button>
         <button type="button" data-pag="conta">A conta</button>
       </nav>
     </div>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v={{versao}}"></script>
   </body>
 </html>
