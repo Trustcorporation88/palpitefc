@@ -42,14 +42,35 @@ class TesteApi(unittest.TestCase):
         # Depois da última rodada não sobra jogo para mexer na tabela.
         if dados["jogosRestantes"]:
             self.assertTrue(dados["impacto"])
+            self.assertTrue(dados["pontosNecessarios"])
+            self.assertGreater(dados["variantes"], 1)
         else:
             self.assertEqual(dados["impacto"], [])
+        self.assertLessEqual(len(dados["impacto"]), 10)
+        for jogo in dados["impactoProximaRodada"]:
+            self.assertEqual(jogo["agenda"]["rodada"], dados["proximaRodada"])
+            self.assertFalse(jogo["agenda"]["atrasado"])
+
+    def test_proxima_rodada_vem_do_calendario(self):
+        dados = self.cliente.get("/api/inicio").json()
+        if dados["proximaRodada"] is None:
+            self.skipTest("Sem calendário ou sem jogo restante")
+        for jogo in dados["proximos"]:
+            self.assertIsNone(jogo["resultado"])
+            self.assertTrue(jogo.get("quando") or jogo["agenda"])
+        time = self.cliente.get("/api/times").json()["times"][0]["id"]
+        jogos = self.cliente.get(f"/api/time/{time}").json()["jogos"]
+        datas = [jogo["agenda"]["data"] for jogo in jogos if jogo["agenda"]]
+        self.assertEqual(datas, sorted(datas))
 
     def test_conta(self):
         dados = self.cliente.get("/api/conta").json()
         self.assertTrue(dados["serie"])
         self.assertIn("calibracao", dados["resumo"])
         self.assertEqual(dados["config"]["versao"], 2)
+        self.assertIn("promovido", dados["config"])
+        if dados["tabela"]:
+            self.assertIn(dados["tabela"]["melhorChave"], dados["tabela"]["prova"])
 
     def test_time_e_simulador(self):
         time = self.cliente.get("/api/times").json()["times"][0]["id"]

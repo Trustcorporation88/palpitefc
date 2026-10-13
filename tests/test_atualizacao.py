@@ -1,8 +1,9 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from palpitefc.atualizar import gravar_proximos
+from palpitefc.atualizar import gravar_calendario, gravar_proximos
 from palpitefc.retrospectiva import primeira_mudanca
 
 
@@ -40,6 +41,16 @@ class TesteProximosBaixados(unittest.TestCase):
             destino = Path(pasta) / "proximos.csv"
             self.assertEqual(gravar_proximos(csv, destino), 1)
             self.assertNotIn("Miami", destino.read_text(encoding="utf-8"))
+
+    def test_calendario_curto_e_recusado(self):
+        bruto = json.dumps(
+            {"matches": [{"round": "Matchday 1", "date": "2026-01-28", "team1": "SE Palmeiras", "team2": "CR Flamengo"}]}
+        ).encode("utf-8")
+        with tempfile.TemporaryDirectory() as pasta:
+            destino = Path(pasta) / "calendario.json"
+            with self.assertRaises(ValueError):
+                gravar_calendario(bruto, destino)
+            self.assertFalse(destino.exists())
 
     def test_recusa_pagina_de_erro(self):
         with tempfile.TemporaryDirectory() as pasta:

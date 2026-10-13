@@ -67,6 +67,23 @@ function nomeDaLeitura(jogo) {
   return "empate";
 }
 
+function dataCurta(iso) {
+  const [, mes, dia] = iso.split("-");
+  return `${dia}/${mes}`;
+}
+
+function cabecalho(jogo, rotulo) {
+  // Tudo que vem do calendário passa por esc(): ele é de terceiros.
+  const agenda = jogo.agenda;
+  const rodada = agenda ? `${esc(agenda.rodada)}ª rodada · ` : "";
+  if (jogo.quando) return `${jogo.resultado ? "" : rodada}${esc(quando(jogo.quando))}`;
+  if (!agenda) return esc(rotulo);
+  if (agenda.atrasado) return `${rodada}adiado, data a definir`;
+  const dia = esc(dataCurta(agenda.data));
+  // Sem hora, o openfootball põe na rodada inteira a data do primeiro dia.
+  return agenda.hora ? `${rodada}previsto para ${dia} · ${esc(agenda.hora)}` : `${rodada}a partir de ${dia}`;
+}
+
 function cartao(jogo, rotulo = "Confronto restante") {
   const artigo = bloco("article", "jogo");
   const resultado = jogo.resultado
@@ -90,7 +107,7 @@ function cartao(jogo, rotulo = "Confronto restante") {
     .join("");
 
   artigo.innerHTML = `
-    <header><span>${jogo.quando ? quando(jogo.quando) : rotulo}</span>${resultado}</header>
+    <header><span>${cabecalho(jogo, rotulo)}</span>${resultado}</header>
     <div class="confronto">
       <div><b>${esc(jogo.casaNome)}</b><small>${decimal(jogo.golsEsperados.casa, 2)} gols esperados</small></div>
       <div class="x" aria-hidden="true">×</div>
@@ -135,13 +152,13 @@ function heroRodada(resumo) {
 async function paginaRodada() {
   const pedacos = [heroRodada(inicio.resumo)];
   if (inicio.proximos?.length) {
+    const comOdd = inicio.proximos.some((jogo) => jogo.mercado);
+    const odd = comOdd
+      ? "A barra azul é a chance da casa de aposta sem a margem. Quando o modelo e a odd discordam, a conferência de 2026 mostra que a odd costuma estar mais perto."
+      : "A chance da casa de aposta aparece quando o football-data publica as odds, às terças e sextas.";
     pedacos.push(
-      bloco("h2", "", "Próximos jogos"),
-      bloco(
-        "p",
-        "nota",
-        "A barra azul é a chance da casa de aposta sem a margem. Quando o modelo e a odd discordam, a conferência de 2026 mostra que a odd costuma estar mais perto. Não é palpite de aposta.",
-      ),
+      bloco("h2", "", inicio.proximaRodada ? `Próxima rodada · ${esc(inicio.proximaRodada)}ª` : "Próximos jogos"),
+      bloco("p", "nota", `Data prevista pelo calendário da temporada; a CBF ainda pode mudar. ${odd} Não é palpite de aposta.`),
     );
     inicio.proximos.forEach((jogo) => pedacos.push(cartao(jogo)));
   }
@@ -178,7 +195,80 @@ function impacto(jogo) {
         `<li><b>${esc(efeito.nome)}</b> · ${esc(efeito.zonaNome.toLowerCase())}: ${pct(efeito.hoje)} hoje, <span class="pos">${pct(efeito.seVencer)}</span> se vencer, <span class="neg">${pct(efeito.sePerder)}</span> se perder</li>`,
     )
     .join("");
-  return `<li class="impacto"><p><b>${esc(jogo.casaNome)} × ${esc(jogo.foraNome)}</b><small>${pct(jogo.chance.casa)} · ${pct(jogo.chance.empate)} · ${pct(jogo.chance.fora)}</small></p><ul>${efeitos}</ul></li>`;
+  const rodada = jogo.agenda ? `${esc(jogo.agenda.rodada)}ª rodada · ` : "";
+  return `<li class="impacto"><p><b>${esc(jogo.casaNome)} × ${esc(jogo.foraNome)}</b><small>${rodada}${pct(jogo.chance.casa)} · ${pct(jogo.chance.empate)} · ${pct(jogo.chance.fora)}</small></p><ul>${efeitos}</ul></li>`;
+}
+
+const CURVAS = [
+  { chave: "titulo", rotulo: "título", classe: "ouro", chance: (linha) => linha.titulo },
+  { chave: "libertadores", rotulo: "G4", classe: "modelo", chance: (linha) => linha.libertadores },
+  { chave: "escapa", rotulo: "escapar do Z4", classe: "odd", chance: (linha) => 1 - linha.rebaixamento },
+];
+
+function pontosPara(curva, serie, alvo) {
+  const linha = curva.find((item) => serie.chance(item) >= alvo);
+  return linha ? linha.pontos : null;
+}
+
+function graficoPontos(curva) {
+  const largura = 640;
+  const altura = 220;
+  const margem = { esquerda: 64, direita: 12, topo: 14, base: 30 };
+  const menor = curva[0].pontos;
+  const maior = curva.at(-1).pontos;
+  const x = (pontos) => margem.esquerda + ((pontos - menor) / Math.max(1, maior - menor)) * (largura - margem.esquerda - margem.direita);
+  const y = (chance) => margem.topo + (1 - chance) * (altura - margem.topo - margem.base);
+  const guias = [0, 0.5, 1]
+    .map(
+      (chance) =>
+        `<line x1="${margem.esquerda}" x2="${largura - margem.direita}" y1="${y(chance)}" y2="${y(chance)}" class="guia"/><text x="${margem.esquerda - 6}" y="${y(chance) + 4}" text-anchor="end">${Math.round(chance * 100)}%</text>`,
+    )
+    .join("");
+  const passo = maior - menor > 40 ? 10 : 5;
+  const marcas = [];
+  for (let pontos = Math.ceil(menor / passo) * passo; pontos <= maior; pontos += passo) {
+    marcas.push(`<text x="${x(pontos)}" y="${altura - 8}" text-anchor="middle">${pontos}</text>`);
+  }
+  const linhas = CURVAS.map(
+    (serie) =>
+      `<polyline class="serie ${serie.classe}" points="${curva.map((linha) => `${x(linha.pontos).toFixed(1)},${y(serie.chance(linha)).toFixed(1)}`).join(" ")}"/>`,
+  ).join("");
+  return `<svg viewBox="0 0 ${largura} ${altura}" class="grafico" role="img" aria-label="Chance de título, G4 e de escapar do Z4 para cada pontuação final">${guias}${marcas.join("")}${linhas}</svg>`;
+}
+
+function secaoPontos(curva) {
+  if (!curva?.length) return null;
+  const linhas = CURVAS.map((serie) => {
+    const metade = pontosPara(curva, serie, 0.5);
+    const quase = pontosPara(curva, serie, 0.9);
+    if (metade == null) return "";
+    return `<tr><td><i class="ponto ${serie.classe}"></i> ${serie.rotulo}</td><td>${metade}</td><td>${quase ?? "–"}</td></tr>`;
+  }).join("");
+  return bloco(
+    "section",
+    "painel",
+    `<h2>Pontos necessários</h2>
+    <p class="nota">De todos os times que terminaram com cada pontuação nas simulações, quantos foram campeões, ficaram no G4 ou escaparam do Z4. Vale para o campeonato como ele está hoje.</p>
+    ${graficoPontos(curva)}
+    <p class="legenda">${CURVAS.map((serie) => `<i class="ponto ${serie.classe}"></i>${serie.rotulo}`).join(" ")}</p>
+    <table class="tabela notas"><thead><tr><th>Objetivo</th><th>50% de chance</th><th>90% de chance</th></tr></thead><tbody>${linhas}</tbody></table>`,
+  );
+}
+
+function secaoImpacto(dados) {
+  const proxima = dados.impactoProximaRodada || [];
+  const naProxima = new Set(proxima.map((jogo) => `${jogo.casa}|${jogo.fora}`));
+  const resto = (dados.impacto || []).filter((jogo) => !naProxima.has(`${jogo.casa}|${jogo.fora}`));
+  const blocoProxima = proxima.length
+    ? `<h3>Na próxima rodada${dados.proximaRodada ? ` (${esc(dados.proximaRodada)}ª)` : ""}</h3><ol class="impactos">${proxima.slice(0, 5).map(impacto).join("")}</ol><h3>No resto do campeonato</h3>`
+    : "";
+  return bloco(
+    "section",
+    "painel",
+    `<h2>Jogos que mais mexem na tabela</h2>
+    <p class="nota">Compara as simulações em que cada time venceu com as que ele perdeu, do maior efeito para o menor.</p>
+    ${blocoProxima}<ol class="impactos">${resto.slice(0, 8).map(impacto).join("")}</ol>`,
+  );
 }
 
 async function paginaTabela() {
@@ -223,18 +313,12 @@ async function paginaTabela() {
       "section",
       "painel",
       `<h2>Chance no fim do campeonato</h2>
-      <p class="nota">Os ${dados.jogosRestantes} jogos que faltam foram sorteados ${dados.simulacoes.toLocaleString("pt-BR")} vezes com a mesma tabela de placares do modelo. A faixa de pontos vale para 90% das simulações. As vagas seguem a regra de 2026 pela posição; a CBF passa a vaga adiante quando um campeão de copa já está classificado.</p>
+      <p class="nota">Os ${dados.jogosRestantes} jogos que faltam foram sorteados ${dados.simulacoes.toLocaleString("pt-BR")} vezes com a mesma tabela de placares do modelo. ${dados.variantes > 1 ? `A força de cada time não é conhecida com exatidão, então cada bloco de ${Math.round(dados.simulacoes / dados.variantes)} temporadas usa uma de ${dados.variantes} versões do modelo sorteadas dentro dessa incerteza. ` : ""}A faixa de pontos vale para 90% das simulações. As vagas seguem a regra de 2026 pela posição; a CBF passa a vaga adiante quando um campeão de copa já está classificado.</p>
       <div class="rolagem"><table class="tabela chances"><thead><tr><th>Time</th><th>Pts no fim</th>${zonas
         .map((zona) => `<th title="${esc(zona.nome)} (${faixa(zona)})">${esc(zona.curto)}</th>`)
         .join("")}</tr></thead><tbody>${chances}</tbody></table></div>`,
     ),
-    bloco(
-      "section",
-      "painel",
-      `<h2>Jogos que mais mexem na tabela</h2>
-      <p class="nota">Compara as simulações em que cada time venceu com as que ele perdeu. A ordem é pelo tamanho da mudança, não pela data do jogo.</p>
-      <ol class="impactos">${(dados.impacto || []).map(impacto).join("")}</ol>`,
-    ),
+    ...[secaoPontos(dados.pontosNecessarios), secaoImpacto(dados)].filter(Boolean),
     bloco(
       "section",
       "painel",
@@ -360,7 +444,7 @@ async function paginaSimular() {
 function graficoLinhas(serie) {
   const largura = 640;
   const altura = 220;
-  const margem = { esquerda: 46, direita: 12, topo: 12, base: 28 };
+  const margem = { esquerda: 64, direita: 12, topo: 14, base: 30 };
   const valores = serie.flatMap((ponto) => [ponto.modelo, ponto.mercado]).filter((valor) => valor != null);
   const minimo = Math.min(...valores) - 0.004;
   const maximo = Math.max(...valores) + 0.004;
@@ -428,6 +512,39 @@ function diferenca(dados) {
   return `<p class="nota">Jogo a jogo, ${quem} por ${decimal(Math.abs(dados.media), 4)} de RPS (intervalo de 95%: ${decimal(baixo, 4)} a ${decimal(alto, 4)}). ${certeza}</p>`;
 }
 
+function lista(itens) {
+  return itens.length < 2 ? itens.join("") : `${itens.slice(0, -1).join(", ")} e ${itens.at(-1)}`;
+}
+
+function secaoConferenciaTabela(conferencia) {
+  if (!conferencia) return null;
+  const prova = conferencia.prova;
+  const escala = conferencia.melhorChave;
+  const comIncerteza = prova[escala];
+  const semIncerteza = prova["0.0"];
+  const hoje = prova["tabela de hoje"];
+  if (!comIncerteza || !semIncerteza || !hoje) return null;
+  const linha = (rotulo, notas) =>
+    `<tr><td>${rotulo}</td><td>${decimal(notas.rps, 4)}</td><td>${decimal(notas.titulo, 3)}</td><td>${decimal(notas.libertadores, 3)}</td><td>${decimal(notas.rebaixamento, 3)}</td></tr>`;
+  const zonas = { titulo: "título", libertadores: "G4", rebaixamento: "Z4" };
+  const melhora = Object.keys(zonas).filter((zona) => comIncerteza[zona] < semIncerteza[zona]).map((zona) => zonas[zona]);
+  const piora = Object.keys(zonas).filter((zona) => comIncerteza[zona] >= semIncerteza[zona]).map((zona) => zonas[zona]);
+  const anos = conferencia.config.temporadasDeProva;
+  const anosEscolha = conferencia.config.temporadasDeEscolha;
+  return bloco(
+    "section",
+    "painel",
+    `<h2>A tabela simulada, conferida</h2>
+    <p class="nota">Em cada temporada de ${anos[0]} a ${anos.at(-1)}, o modelo foi ajustado só com o que havia depois de ${lista(conferencia.config.rodadasDeCorte.map(String))} rodadas, o resto do campeonato foi simulado e a chance de cada posição foi comparada com a classificação final de verdade. Menor é melhor.</p>
+    <div class="rolagem"><table class="tabela notas"><thead><tr><th>Previsão</th><th>RPS da posição</th><th>Brier título</th><th>Brier G4</th><th>Brier Z4</th></tr></thead><tbody>
+      ${linha(`Com incerteza (escala ${esc(escala.replace(".", ","))})`, comIncerteza)}
+      ${linha("Sem incerteza", semIncerteza)}
+      ${linha("Tabela de hoje fica como está", hoje)}
+    </tbody></table></div>
+    <p class="nota">A escala da incerteza foi escolhida em ${anosEscolha[0]}–${anosEscolha.at(-1)}. Na prova, ela ${comIncerteza.rps < semIncerteza.rps ? "melhora" : "não melhora"} o RPS da posição${melhora.length ? ` e o Brier ${lista(melhora.map((zona) => `do ${zona}`))}` : ""}${piora.length ? `; ${lista(piora.map((zona) => `no ${zona}`))}, piora um pouco` : ""}.</p>`,
+  );
+}
+
 async function paginaConta() {
   const dados = await api("/api/conta");
   const resumo = dados.resumo;
@@ -481,11 +598,13 @@ async function paginaConta() {
       <p class="nota">A vantagem seria marcada quando a chance do modelo, na odd média, prometesse mais de 3% de retorno. Ela acertou ${pct(resumo.taxaPalpite)} e perdeu dinheiro. A odd favorita também perde, porque a casa fica com a margem, mas perde menos. Por isso o site mostra a chance e não marca aposta.</p>
       <p class="nota">Um acerto passado não vale para o próximo jogo. Toda combinação continua incerta.</p>`,
     ),
+    ...[secaoConferenciaTabela(dados.tabela)].filter(Boolean),
     bloco(
       "section",
       "painel",
       `<h2>Como o modelo foi regulado</h2>
-      <p class="nota">Peso do jogo antigo: cai ${decimal((1 - Math.exp(-(config.xi || 0) * 365)) * 100, 0)}% por ano (xi = ${String(config.xi).replace(".", ",")}). Puxão para a média: ${config.l2}, que segura o time recém-promovido com poucos jogos na base. Janela: ${config.janelaDias} dias. Os dois números foram escolhidos pelo menor RPS em 2024 e 2025; 2026 ficou de fora da escolha e serve de prova. A odd perde a margem pelo método de Shin.</p>
+      <p class="nota">Peso do jogo antigo: cai ${decimal((1 - Math.exp(-(config.xi || 0) * 365)) * 100, 0)}% por ano (xi = ${String(config.xi).replace(".", ",")}). Puxão para a média: ${config.l2}, que segura o time com poucos jogos na base. O time que subiu da Série B é puxado para um nível um pouco abaixo da média (${String(config.promovido ?? 0).replace(".", ",")} no ataque e na defesa, na escala do modelo), e não para a média. Janela: ${config.janelaDias} dias. Os três números foram escolhidos pelo menor RPS em 2024 e 2025; 2026 ficou de fora da escolha e serve de prova. A odd perde a margem pelo método de Shin.</p>
+      ${dados.simulacao?.variantes > 1 ? `<p class="nota">Na tabela simulada, a incerteza da força de cada time entra por ${dados.simulacao.variantes} versões do modelo sorteadas da covariância dos parâmetros, com escala ${String(dados.simulacao.escalaIncerteza).replace(".", ",")}.</p>` : ""}
       <p class="nota pequeno">Conta gerada em ${esc(dados.geradoEm.replace("T", " "))}.</p>`,
     ),
   );

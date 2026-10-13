@@ -3,7 +3,9 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from palpitefc.dados import carregar_proximos
+import numpy as np
+
+from palpitefc.dados import carregar_proximos, converter_calendario
 from palpitefc.model import Modelo
 from palpitefc.simulacao import ZONAS, classificacao, simular
 
@@ -62,9 +64,39 @@ class TesteSimulacao(unittest.TestCase):
         self.assertEqual(resultado["times"][-1]["zonas"]["rebaixamento"], 1.0)
         self.assertEqual(resultado["impacto"], [])
 
+    def test_incerteza_espalha_as_posicoes(self):
+        com_incerteza = Modelo(**{**self.modelo.__dict__, "covariancia": np.eye(40) * 0.01})
+        firme = simular(com_incerteza, self.tabela, self.restantes, simulacoes=4000, escala=0.0)
+        solto = simular(com_incerteza, self.tabela, self.restantes, simulacoes=4000, escala=2.0, variantes=100)
+        self.assertEqual(firme["variantes"], 1)
+        self.assertEqual(solto["variantes"], 100)
+
+        def espalhamento(resultado):
+            posicoes = np.arange(1, 21)
+            desvios = []
+            for linha in resultado["times"]:
+                chance = np.array(linha["posicoes"])
+                media = (chance * posicoes).sum()
+                desvios.append(np.sqrt((chance * (posicoes - media) ** 2).sum()))
+            return np.mean(desvios)
+
+        self.assertGreater(espalhamento(solto), espalhamento(firme))
+
+    def test_pontos_necessarios(self):
+        resultado = simular(self.modelo, self.tabela, self.restantes, simulacoes=4000)
+        curva = resultado["pontosNecessarios"]
+        self.assertTrue(curva)
+        self.assertEqual([linha["pontos"] for linha in curva], sorted(linha["pontos"] for linha in curva))
+        for linha in curva:
+            self.assertGreaterEqual(linha["casos"], 200)
+            self.assertTrue(0.0 <= linha["titulo"] <= linha["libertadores"] <= 1.0)
+        self.assertGreater(curva[-1]["titulo"], curva[0]["titulo"])
+        self.assertGreater(curva[0]["rebaixamento"], curva[-1]["rebaixamento"])
+
     def test_impacto_aponta_quem_ganha_e_quem_perde(self):
         resultado = simular(self.modelo, self.tabela, self.restantes, simulacoes=2000)
-        self.assertLessEqual(len(resultado["impacto"]), 10)
+        pesos = [confronto["peso"] for confronto in resultado["impacto"]]
+        self.assertEqual(pesos, sorted(pesos, reverse=True))
         for confronto in resultado["impacto"]:
             for efeito in confronto["efeitos"]:
                 if efeito["zona"] == "rebaixamento":
@@ -78,6 +110,25 @@ class TesteSimulacao(unittest.TestCase):
         self.assertEqual(faixas["prelibertadores"], (5, 5))
         self.assertEqual(faixas["sulamericana"], (6, 11))
         self.assertEqual(faixas["rebaixamento"], (17, 20))
+
+
+class TesteCalendario(unittest.TestCase):
+    def test_converte_nomes_e_rodadas(self):
+        bruto = {
+            "matches": [
+                {"round": "Matchday 31", "date": "2026-10-18", "time": "16:00", "team1": "SE Palmeiras", "team2": "CR Flamengo"},
+                {"round": "Matchday 30", "date": "2026-10-22", "team1": "CR Vasco da Gama", "team2": "Chapecoense AF", "status": "postponed"},
+            ]
+        }
+        jogos = converter_calendario(bruto)
+        self.assertEqual(jogos[0], {"rodada": 31, "data": "2026-10-18", "hora": "16:00", "casa": "Palmeiras", "fora": "Flamengo RJ", "adiado": False})
+        self.assertIsNone(jogos[1]["hora"])
+        self.assertTrue(jogos[1]["adiado"])
+
+    def test_time_desconhecido_derruba_a_conversao(self):
+        bruto = {"matches": [{"round": "Matchday 1", "date": "2027-02-01", "team1": "Sport Recife", "team2": "SE Palmeiras"}]}
+        with self.assertRaises(ValueError):
+            converter_calendario(bruto)
 
 
 class TesteProximos(unittest.TestCase):

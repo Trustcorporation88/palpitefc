@@ -21,9 +21,9 @@ from pathlib import Path
 
 import numpy as np
 
-from palpitefc.dados import PASTA, carregar, para_ajuste
+from palpitefc.dados import PASTA, carregar, para_ajuste, promovidos
 from palpitefc.metricas import MERCADOS, calibracao, media_das_notas, notas
-from palpitefc.model import L2_PADRAO, XI_DECAIMENTO, ajustar
+from palpitefc.model import L2_PADRAO, PROMOVIDO_PADRAO, XI_DECAIMENTO, ajustar
 from palpitefc.palpite import avaliar
 
 ARQUIVO = PASTA / "retrospectiva.json"
@@ -44,11 +44,14 @@ def impressao_do_codigo() -> str:
     return _hash("".join((pasta / nome).read_text(encoding="utf-8") for nome in CODIGO_DO_CALCULO))
 
 
-def configuracao(xi: float = XI_DECAIMENTO, l2: float = L2_PADRAO, janela: timedelta = JANELA) -> dict:
+def configuracao(
+    xi: float = XI_DECAIMENTO, l2: float = L2_PADRAO, promovido: float = PROMOVIDO_PADRAO, janela: timedelta = JANELA
+) -> dict:
     return {
         "versao": VERSAO,
         "xi": xi,
         "l2": l2,
+        "promovido": promovido,
         "janelaDias": janela.days,
         "minimoJogos": MINIMO_JOGOS,
         "codigo": impressao_do_codigo(),
@@ -117,10 +120,12 @@ def prever_temporada(
     janela: timedelta = JANELA,
     prontos: dict[str, dict] | None = None,
     por_dia: bool = False,
+    promovido: float = PROMOVIDO_PADRAO,
 ) -> list[dict]:
     """Um cartão por jogo da temporada. `por_dia` ajusta uma vez por data,
     com o que havia antes da meia-noite; serve para a busca de parâmetros."""
     prontos = prontos or {}
+    subiram = promovidos(jogos, temporada)
     modelos: dict[datetime, object] = {}
     cartoes = []
     for jogo in jogos:
@@ -139,7 +144,7 @@ def prever_temporada(
         if jogo["casa"] not in times_vistos or jogo["fora"] not in times_vistos or len(base) < MINIMO_JOGOS:
             continue
         if corte not in modelos:
-            modelos[corte] = ajustar(base, xi, l2)
+            modelos[corte] = ajustar(base, xi, l2, subiram, promovido)
 
         odds = {"casa": jogo["odd_casa"], "empate": jogo["odd_empate"], "fora": jogo["odd_fora"]}
         cartao = avaliar(modelos[corte], jogo["casa"], jogo["fora"], odds, marcar_vantagem=True)

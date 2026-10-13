@@ -272,3 +272,14 @@ select {
 .impacto p small { color: var(--mudo); font-size: 0.75rem; }
 .impacto ul { margin: 0; padding-left: 16px; color: var(--mudo); font-size: 0.82rem; line-height: 1.5; }
 .impacto ul b { color: var(--texto); font-weight: 600; }
+
+/* Pontos necessários e próxima rodada */
+.painel h3 { font-size: 0.95rem; margin: 14px 0 6px; color: var(--mudo); }
+.ponto.ouro { background: var(--ouro); }
+.grafico .serie.ouro { stroke: var(--ouro); }
+
+@media (max-width: 520px) {
+  /* O SVG largo encolhe para menos da metade no celular: a fonte compensa. */
+  .grafico:not(.quadrado) text { font-size: 21px; }
+  .grafico:not(.quadrado) .serie { stroke-width: 4; }
+}

@@ -10,7 +10,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from palpitefc.dados import ARQUIVO, ARQUIVO_PROXIMOS
+from palpitefc.conferir_tabela import ARQUIVO as ARQUIVO_CONFERENCIA
+from palpitefc.dados import ARQUIVO, ARQUIVO_CALENDARIO, ARQUIVO_PROXIMOS
 from palpitefc.retrospectiva import ARQUIVO as ARQUIVO_RETRO
 from palpitefc.servico import painel
 
@@ -100,7 +101,16 @@ def versao() -> str:
     """Muda quando muda o CSS, o JS ou os dados. Vai na URL dos estáticos e
     das chamadas da API, para o cache do navegador nunca misturar versões."""
     resumo = hashlib.sha256()
-    for arquivo in (WEB / "app.js", WEB / "estilos.css", ARQUIVO, ARQUIVO_PROXIMOS, ARQUIVO_RETRO):
+    arquivos = (
+        WEB / "app.js",
+        WEB / "estilos.css",
+        ARQUIVO,
+        ARQUIVO_PROXIMOS,
+        ARQUIVO_CALENDARIO,
+        ARQUIVO_RETRO,
+        ARQUIVO_CONFERENCIA,
+    )
+    for arquivo in arquivos:
         if arquivo.exists():
             resumo.update(arquivo.read_bytes())
     return resumo.hexdigest()[:10]

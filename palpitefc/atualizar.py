@@ -1,4 +1,5 @@
-"""Baixa os resultados e os próximos jogos do football-data e refaz a conferência.
+"""Baixa os resultados e os próximos jogos do football-data, o calendário do
+openfootball, e refaz a conferência.
 
     python -m palpitefc.atualizar
 
@@ -16,11 +17,20 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from palpitefc.dados import ARQUIVO, ARQUIVO_PROXIMOS, carregar
+from palpitefc.dados import (
+    ARQUIVO,
+    ARQUIVO_CALENDARIO,
+    ARQUIVO_PROXIMOS,
+    TEMPORADA_ATUAL,
+    carregar,
+    converter_calendario,
+)
 from palpitefc.retrospectiva import salvar
 
 URL_RESULTADOS = "https://www.football-data.co.uk/new/BRA.csv"
 URL_PROXIMOS = "https://www.football-data.co.uk/new_league_fixtures.csv"
+URL_CALENDARIO = "https://raw.githubusercontent.com/openfootball/football.json/master/{temporada}/br.1.json"
+JOGOS_MINIMOS_CALENDARIO = 300
 TEMPO_LIMITE = 60
 COLUNAS_PROXIMOS = {"Country", "League", "Date", "Time", "Home", "Away"}
 
@@ -65,21 +75,48 @@ def gravar_proximos(conteudo: bytes, destino: Path = ARQUIVO_PROXIMOS) -> int:
     escritor = csv.DictWriter(saida, fieldnames=leitor.fieldnames, lineterminator="\n")
     escritor.writeheader()
     escritor.writerows(linhas)
-    if not destino.exists() or destino.read_text(encoding="utf-8") != saida.getvalue():
-        destino.write_text(saida.getvalue(), encoding="utf-8")
+    _gravar_se_mudou(destino, saida.getvalue())
     return len(linhas)
+
+
+def gravar_calendario(
+    conteudo: bytes, destino: Path = ARQUIVO_CALENDARIO, temporada: str = TEMPORADA_ATUAL
+) -> int:
+    jogos = converter_calendario(json.loads(conteudo.decode("utf-8-sig")))
+    if len(jogos) < JOGOS_MINIMOS_CALENDARIO:
+        raise ValueError(f"Calendário com só {len(jogos)} jogos")
+    # Um jogo por linha: o diff do commit mostra só o que mudou de data. A
+    # temporada vai junto para o calendário velho não valer no ano seguinte.
+    linhas = ",\n".join(json.dumps(jogo, ensure_ascii=False) for jogo in jogos)
+    texto = f'{{"temporada": {json.dumps(temporada)}, "jogos": [\n{linhas}\n]}}\n'
+    _gravar_se_mudou(destino, texto)
+    return len(jogos)
+
+
+def _gravar_se_mudou(destino: Path, texto: str) -> None:
+    # Bytes com \n: o arquivo sai igual no Windows e no GitHub Actions.
+    conteudo = texto.encode("utf-8")
+    if not destino.exists() or destino.read_bytes() != conteudo:
+        destino.write_bytes(conteudo)
+
+
+def _opcional(nome: str, tarefa):
+    """Sem os próximos jogos ou o calendário, o site continua; só some a parte deles."""
+    try:
+        return tarefa()
+    except (OSError, ValueError, KeyError) as erro:
+        print(f"{nome} não atualizado: {erro}")
+        return None
 
 
 def atualizar() -> dict:
     jogos_novos = gravar_resultados(baixar(URL_RESULTADOS))
-    try:
-        proximos = gravar_proximos(baixar(URL_PROXIMOS))
-    except (OSError, ValueError) as erro:
-        # Sem a lista de próximos jogos, o site continua; só some a seção.
-        print(f"Próximos jogos não baixados: {erro}")
-        proximos = None
+    proximos = _opcional("Próximos jogos", lambda: gravar_proximos(baixar(URL_PROXIMOS)))
+    calendario = _opcional(
+        "Calendário", lambda: gravar_calendario(baixar(URL_CALENDARIO.format(temporada=TEMPORADA_ATUAL)))
+    )
     resumo = salvar()
-    return {"jogosNovos": jogos_novos, "proximos": proximos, "conferidos": resumo["jogos"]}
+    return {"jogosNovos": jogos_novos, "proximos": proximos, "calendario": calendario, "conferidos": resumo["jogos"]}
 
 
 if __name__ == "__main__":

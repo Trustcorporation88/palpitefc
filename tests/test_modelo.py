@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from scipy.optimize import approx_fprime
 
-from palpitefc.model import _verossimilhanca_negativa, ajustar, mercados, tabela_de_placares
+from palpitefc.model import _Dados, _verossimilhanca_negativa, ajustar, mercados, tabela_de_placares, tabelas_de_placares
 from palpitefc.palpite import avaliar
 
 
@@ -14,6 +14,9 @@ class TesteModelo(unittest.TestCase):
         self.assertAlmostEqual(float(grade.sum()), 1.0, places=6)
         independente = tabela_de_placares(1.4, 1.1, 0.0)
         self.assertGreater(grade[0, 0], independente[0, 0])
+        varias = tabelas_de_placares(np.array([1.4, 0.9]), np.array([1.1, 1.6]), np.array([-0.1, 0.05]))
+        np.testing.assert_allclose(varias[0], grade)
+        np.testing.assert_allclose(varias[1], tabela_de_placares(0.9, 1.6, 0.05))
 
     def test_mercados_fecham_o_resultado(self):
         grade = tabela_de_placares(1.5, 1.2, -0.05)
@@ -81,11 +84,58 @@ class TesteModelo(unittest.TestCase):
         gols_fora = rng.poisson(1.0, n_jogos).astype(float)
         pesos = rng.uniform(0.5, 1.5, n_jogos)
         parametros = np.concatenate([rng.normal(0, 0.2, 2 * (n_times - 1)), [0.3, -0.08]])
-        for l2 in (0.0, 5.0):
-            argumentos = (casa, fora, gols_casa, gols_fora, pesos, n_times, l2)
-            _, gradiente = _verossimilhanca_negativa(parametros, *argumentos)
-            numerico = approx_fprime(parametros, lambda p: _verossimilhanca_negativa(p, *argumentos)[0], 1e-7)
+        centro = rng.normal(0, 0.1, n_times)
+        for l2, centro_ataque, centro_defesa in ((0.0, None, None), (5.0, None, None), (5.0, -centro, centro)):
+            dados = _Dados(casa, fora, gols_casa, gols_fora, pesos, n_times, l2, centro_ataque, centro_defesa)
+            _, gradiente = _verossimilhanca_negativa(parametros, dados)
+            numerico = approx_fprime(parametros, lambda p: _verossimilhanca_negativa(p, dados)[0], 1e-7)
             np.testing.assert_allclose(gradiente, numerico, rtol=1e-4, atol=1e-3)
+
+    def test_incerteza_cai_com_mais_jogos(self):
+        rng = np.random.default_rng(5)
+        times = ["A", "B", "C", "D", "E", "F"]
+        forca = dict(zip(times, np.linspace(-0.3, 0.3, len(times))))
+
+        def temporadas(quantas):
+            jogos = []
+            for _ in range(quantas):
+                for casa in times:
+                    for fora in times:
+                        if casa != fora:
+                            jogos.append(
+                                {
+                                    "casa": casa,
+                                    "fora": fora,
+                                    "gols_casa": int(rng.poisson(np.exp(0.3 + forca[casa] - forca[fora]))),
+                                    "gols_fora": int(rng.poisson(np.exp(forca[fora] - forca[casa]))),
+                                    "dias": 10.0,
+                                }
+                            )
+            return jogos
+
+        pouco = ajustar(temporadas(2), l2=1.0, com_incerteza=True)
+        muito = ajustar(temporadas(20), l2=1.0, com_incerteza=True)
+        self.assertEqual(pouco.covariancia.shape, (2 * len(times), 2 * len(times)))
+        self.assertGreater(np.trace(pouco.covariancia), 3 * np.trace(muito.covariancia))
+        self.assertTrue(np.all(np.linalg.eigvalsh(muito.covariancia) > -1e-9))
+        amostras = muito.amostras(400, 1.0, np.random.default_rng(1))
+        desvio = np.std([modelo.ataque["A"] for modelo in amostras])
+        self.assertGreater(desvio, 0)
+        self.assertEqual(muito.amostras(3, 0.0, rng), [muito] * 3)
+
+    def test_promovido_comeca_abaixo_da_media(self):
+        jogos = []
+        times = ["A", "B", "C", "D"]
+        for rodada in range(10):
+            for casa in times:
+                for fora in times:
+                    if casa != fora:
+                        jogos.append({"casa": casa, "fora": fora, "gols_casa": 1 + rodada % 2, "gols_fora": 1, "dias": 30.0})
+        jogos.append({"casa": "Novo", "fora": "A", "gols_casa": 1, "gols_fora": 1, "dias": 1.0})
+        neutro = ajustar(jogos, l2=10.0)
+        promovido = ajustar(jogos, l2=10.0, promovidos={"Novo"}, deslocamento_promovido=0.3)
+        self.assertLess(promovido.ataque["Novo"], neutro.ataque["Novo"])
+        self.assertGreater(promovido.defesa["Novo"], neutro.defesa["Novo"])
 
     def test_l2_segura_time_com_poucos_jogos(self):
         jogos = []

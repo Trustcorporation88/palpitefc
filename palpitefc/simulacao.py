@@ -5,19 +5,34 @@ as chances do jogo. Somando os pontos, sai a chance de cada time terminar em
 cada posição. É o mesmo princípio do site de probabilidades da UFMG e da
 antiga previsão do FiveThirtyEight.
 
+A força dos times não é conhecida com exatidão. Por isso cada bloco de
+temporadas usa uma versão do modelo sorteada da incerteza dos parâmetros
+(covariância sanduíche). Sem isso, a simulação trata a força estimada como
+certa e fica confiante demais. A escala dessa incerteza é conferida em
+temporadas passadas por `python -m palpitefc.conferir_tabela`.
+
 Desempate da CBF: pontos, vitórias, saldo, gols marcados. Confronto direto e
 cartões ficam de fora; o que ainda empatar é decidido por sorteio.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from palpitefc.dados import nome_publico
-from palpitefc.model import Modelo
+from palpitefc.model import Modelo, tabelas_de_placares
 
 SIMULACOES = 20_000
 SEMENTE = 2026
+# Versões do modelo sorteadas da incerteza; cada uma joga SIMULACOES / VARIANTES temporadas.
+VARIANTES = 200
+# Multiplica o desvio dos parâmetros; zero desliga a incerteza. Escolhida por
+# `python -m palpitefc.conferir_tabela`: RPS da posição final 0,1006 -> 0,0986
+# em 2013-2019 e 0,1012 -> 0,0993 na prova de 2020-2025. Um teste confere que
+# este número é o mesmo que a conferência escolheu.
+ESCALA_INCERTEZA = 1.5
 
 # Regra de 2026: o G6 acabou. Do 1º ao 4º vão à fase de grupos da
 # Libertadores, o 5º à fase prévia, do 6º ao 11º à Sul-Americana e o Z4 cai.
@@ -31,7 +46,8 @@ ZONAS = (
     {"id": "rebaixamento", "nome": "Rebaixamento", "curto": "Z4", "de": 17, "ate": 20},
 )
 ZONAS_DE_IMPACTO = ("titulo", "libertadores", "rebaixamento")
-IMPACTOS_EXIBIDOS = 10
+# Pontuação final que aparece em menos casos que isso fica fora da curva.
+CASOS_MINIMOS_PONTOS = 200
 
 
 def classificacao(jogos: list[dict], times: list[str]) -> list[dict]:
@@ -65,35 +81,57 @@ def classificacao(jogos: list[dict], times: list[str]) -> list[dict]:
     return tabela
 
 
-def simular(
+@dataclass
+class Sorteio:
+    pontos: np.ndarray  # (simulações, times), na ordem da tabela
+    posicoes: np.ndarray  # (simulações, times); 0 é o líder
+    jogos: list[tuple[str, str, np.ndarray]]  # casa, fora e o sinal do placar em cada simulação
+    variantes: int
+
+
+def sortear(
     modelo: Modelo,
     tabela: list[dict],
     restantes: list[tuple[str, str]],
     simulacoes: int = SIMULACOES,
     semente: int = SEMENTE,
-) -> dict:
+    escala: float = ESCALA_INCERTEZA,
+    variantes: int = VARIANTES,
+) -> Sorteio:
     times = [linha["id"] for linha in tabela]
     indice = {time: pos for pos, time in enumerate(times)}
     n_times = len(times)
     rng = np.random.default_rng(semente)
 
+    modelos = modelo.amostras(variantes, escala, rng) if escala > 0 and modelo.covariancia is not None else [modelo]
+    n_variantes = len(modelos)
+    por_variante = -(-simulacoes // n_variantes)
+    simulacoes = por_variante * n_variantes
+    ataque = np.array([[versao.ataque.get(time, 0.0) for time in times] for versao in modelos])
+    defesa = np.array([[versao.defesa.get(time, 0.0) for time in times] for versao in modelos])
+    mando = np.array([versao.mando for versao in modelos])
+    rho = np.array([versao.rho for versao in modelos])
+
     pontos = np.tile(np.array([linha["pts"] for linha in tabela], dtype=np.int32), (simulacoes, 1))
     vitorias = np.tile(np.array([linha["v"] for linha in tabela], dtype=np.int32), (simulacoes, 1))
     saldo = np.tile(np.array([linha["sg"] for linha in tabela], dtype=np.int32), (simulacoes, 1))
     marcados = np.tile(np.array([linha["gp"] for linha in tabela], dtype=np.int32), (simulacoes, 1))
-    sorteados: list[tuple[str, str, np.ndarray, np.ndarray]] = []
+    jogos: list[tuple[str, str, np.ndarray]] = []
 
     for casa, fora in restantes:
-        if casa not in indice or fora not in indice:
+        if casa not in indice or fora not in indice or casa not in modelo.ataque or fora not in modelo.ataque:
             continue
-        grade = modelo.tabela(casa, fora)
-        lado = grade.shape[1]
-        acumulada = np.cumsum(grade.ravel())
-        sorteio = np.searchsorted(acumulada, rng.random(simulacoes) * acumulada[-1], side="right")
-        sorteio = np.minimum(sorteio, acumulada.size - 1)
+        c, f = indice[casa], indice[fora]
+        grades = tabelas_de_placares(np.exp(mando + ataque[:, c] + defesa[:, f]), np.exp(ataque[:, f] + defesa[:, c]), rho)
+        lado = grades.shape[2]
+        acumuladas = np.cumsum(grades.reshape(n_variantes, -1), axis=1)
+        sorte = rng.random((n_variantes, por_variante))
+        sorteio = np.empty((n_variantes, por_variante), dtype=np.int64)
+        for versao in range(n_variantes):
+            sorteio[versao] = np.searchsorted(acumuladas[versao], sorte[versao] * acumuladas[versao, -1], side="right")
+        sorteio = np.minimum(sorteio.ravel(), lado * lado - 1)
         gols_casa = (sorteio // lado).astype(np.int32)
         gols_fora = (sorteio % lado).astype(np.int32)
-        c, f = indice[casa], indice[fora]
         vence_casa = gols_casa > gols_fora
         vence_fora = gols_casa < gols_fora
         empate = ~(vence_casa | vence_fora)
@@ -105,7 +143,7 @@ def simular(
         saldo[:, f] += gols_fora - gols_casa
         marcados[:, c] += gols_casa
         marcados[:, f] += gols_fora
-        sorteados.append((casa, fora, np.sign(gols_casa - gols_fora).astype(np.int8), grade))
+        jogos.append((casa, fora, np.sign(gols_casa - gols_fora).astype(np.int8)))
 
     # Uma chave só para ordenar: cada critério ocupa sua própria faixa de dígitos.
     chave = (
@@ -118,10 +156,30 @@ def simular(
     ordem = np.argsort(-chave, axis=1)
     posicoes = np.empty_like(ordem)
     np.put_along_axis(posicoes, ordem, np.arange(n_times)[None, :].repeat(simulacoes, axis=0), axis=1)
+    return Sorteio(pontos=pontos, posicoes=posicoes, jogos=jogos, variantes=n_variantes)
 
+
+def distribuicao_de_posicoes(posicoes: np.ndarray) -> np.ndarray:
+    """Linha = time na ordem da tabela, coluna = chance de terminar em cada posição."""
+    simulacoes, n_times = posicoes.shape
     distribuicao = np.zeros((n_times, n_times))
     for pos in range(n_times):
         distribuicao[pos] = np.bincount(posicoes[:, pos], minlength=n_times) / simulacoes
+    return distribuicao
+
+
+def simular(
+    modelo: Modelo,
+    tabela: list[dict],
+    restantes: list[tuple[str, str]],
+    simulacoes: int = SIMULACOES,
+    semente: int = SEMENTE,
+    escala: float = ESCALA_INCERTEZA,
+    variantes: int = VARIANTES,
+) -> dict:
+    sorteio = sortear(modelo, tabela, restantes, simulacoes, semente, escala, variantes)
+    pontos, posicoes = sorteio.pontos, sorteio.posicoes
+    distribuicao = distribuicao_de_posicoes(posicoes)
 
     linhas = []
     for pos, linha in enumerate(tabela):
@@ -137,24 +195,60 @@ def simular(
                 "posicoes": [float(valor) for valor in distribuicao[pos]],
             }
         )
+    indice = {linha["id"]: pos for pos, linha in enumerate(tabela)}
     return {
-        "simulacoes": simulacoes,
-        "jogosRestantes": len(restantes),
+        "simulacoes": int(pontos.shape[0]),
+        "variantes": sorteio.variantes,
+        "escalaIncerteza": escala if sorteio.variantes > 1 else 0.0,
+        "jogosRestantes": len(sorteio.jogos),
         "zonas": list(ZONAS),
         "times": linhas,
-        "impacto": _impacto(sorteados, posicoes, indice),
+        "pontosNecessarios": pontos_necessarios(pontos, posicoes),
+        "impacto": _impacto(modelo, sorteio.jogos, posicoes, indice),
     }
 
 
-def _impacto(sorteados: list, posicoes: np.ndarray, indice: dict[str, int]) -> list[dict]:
-    """Quanto cada confronto mexe na chance dos dois times.
+def pontos_necessarios(pontos: np.ndarray, posicoes: np.ndarray, minimo: int = CASOS_MINIMOS_PONTOS) -> list[dict]:
+    """Para cada pontuação final, a chance de cair em cada zona.
 
-    Compara as simulações em que o mandante venceu com as que o visitante
-    venceu. É a mesma ideia da "importância do jogo" do FiveThirtyEight.
+    Junta todos os times de todas as simulações: de quem terminou com 70
+    pontos, quantos foram campeões? É a curva de "pontos necessários" do
+    site da UFMG, e vale para o campeonato como ele está hoje.
     """
-    zonas = {zona["id"]: zona for zona in ZONAS if zona["id"] in ZONAS_DE_IMPACTO}
-    jogos = []
-    for casa, fora, sinal, grade in sorteados:
+    if pontos.size == 0:
+        return []
+    valores = pontos.ravel().astype(np.int64)
+    lugar = posicoes.ravel() + 1
+    menor = int(valores.min())
+    deslocados = valores - menor
+    casos = np.bincount(deslocados)
+    por_zona = {
+        zona["id"]: np.bincount(deslocados, weights=(lugar >= zona["de"]) & (lugar <= zona["ate"]), minlength=casos.size)
+        for zona in ZONAS
+    }
+    linhas = []
+    for passo, quantos in enumerate(casos):
+        if quantos < minimo:
+            continue
+        linhas.append(
+            {
+                "pontos": menor + passo,
+                "casos": int(quantos),
+                **{zona: float(contagem[passo] / quantos) for zona, contagem in por_zona.items()},
+            }
+        )
+    return linhas
+
+
+def _impacto(modelo: Modelo, jogos: list, posicoes: np.ndarray, indice: dict[str, int]) -> list[dict]:
+    """Quanto cada confronto mexe na chance dos dois times, do maior para o menor.
+
+    Compara as simulações em que cada time venceu com as que ele perdeu. É a
+    mesma ideia da "importância do jogo" do FiveThirtyEight.
+    """
+    zonas = [zona for zona in ZONAS if zona["id"] in ZONAS_DE_IMPACTO]
+    resultado = []
+    for casa, fora, sinal in jogos:
         vence_casa = sinal > 0
         vence_fora = sinal < 0
         if not vence_casa.any() or not vence_fora.any():
@@ -163,7 +257,7 @@ def _impacto(sorteados: list, posicoes: np.ndarray, indice: dict[str, int]) -> l
         for time, venceu, perdeu in ((casa, vence_casa, vence_fora), (fora, vence_fora, vence_casa)):
             posicao = posicoes[:, indice[time]] + 1
             melhor = None
-            for zona in zonas.values():
+            for zona in zonas:
                 dentro = (posicao >= zona["de"]) & (posicao <= zona["ate"])
                 se_vencer = float(dentro[venceu].mean())
                 se_perder = float(dentro[perdeu].mean())
@@ -180,8 +274,9 @@ def _impacto(sorteados: list, posicoes: np.ndarray, indice: dict[str, int]) -> l
                         "diferenca": diferenca,
                     }
             efeitos.append(melhor)
+        grade = modelo.tabela(casa, fora)
         i, j = np.indices(grade.shape)
-        jogos.append(
+        resultado.append(
             {
                 "casa": casa,
                 "fora": fora,
@@ -196,5 +291,5 @@ def _impacto(sorteados: list, posicoes: np.ndarray, indice: dict[str, int]) -> l
                 "efeitos": efeitos,
             }
         )
-    jogos.sort(key=lambda jogo: jogo["peso"], reverse=True)
-    return jogos[:IMPACTOS_EXIBIDOS]
+    resultado.sort(key=lambda jogo: jogo["peso"], reverse=True)
+    return resultado
