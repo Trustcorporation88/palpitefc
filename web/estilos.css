@@ -52,6 +52,7 @@ h2 { font-size: 1.25rem; margin: 0 0 8px; }
 .olho { margin: 0 0 6px; color: var(--lima); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .selo, .aviso, .nota { color: var(--mudo); }
 
+#sair { margin: 0; padding: 6px 10px; font-size: 0.75rem; }
 .selo {
   border: 1px solid var(--lima);
   border-radius: 999px;
