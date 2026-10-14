@@ -87,9 +87,19 @@ class TesteApi(unittest.TestCase):
         dados = self.cliente.get(f"/api/time/{time}").json()
         self.assertEqual(dados["tabela"]["id"], time)
         self.assertEqual(self.cliente.get("/api/time/Inexistente").status_code, 404)
+        # Até 5: estreante sem jogo na base tem forma menor, e a atualização diária não pode travar por isso.
+        self.assertLessEqual(len(dados["forma"]), 5)
+        self.assertTrue(all(jogo["texto"] and len(jogo["forma"]["casa"]) <= 5 for jogo in dados["jogos"]))
         jogo = self.cliente.get("/api/simular", params={"casa": "Palmeiras", "fora": "Flamengo RJ"}).json()
         self.assertEqual(len(jogo["grade"]), 6)
         self.assertIsNone(jogo["palpite"])
+        self.assertGreater(jogo["confronto"]["jogos"], 0)
+        self.assertEqual(
+            jogo["confronto"]["vitorias"]["Palmeiras"] + jogo["confronto"]["vitorias"]["Flamengo RJ"] + jogo["confronto"]["empates"],
+            jogo["confronto"]["jogos"],
+        )
+        self.assertLessEqual(len(jogo["formaDetalhada"]["fora"]), 5)
+        self.assertTrue(any("Pela conta" in frase for frase in jogo["texto"]))
         self.assertEqual(self.cliente.get("/api/simular", params={"casa": "Palmeiras", "fora": "Palmeiras"}).status_code, 400)
 
     def test_cabecalhos(self):

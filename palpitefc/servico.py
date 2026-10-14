@@ -19,10 +19,12 @@ from palpitefc.dados import (
 )
 from palpitefc.metricas import media_das_notas
 from palpitefc.model import L2_PADRAO, PROMOVIDO_PADRAO, XI_DECAIMENTO, ajustar
+from palpitefc.historico import confronto, forma
 from palpitefc.palpite import avaliar
 from palpitefc.retrospectiva import ARQUIVO as RETRO_ARQUIVO
 from palpitefc.retrospectiva import JANELA
 from palpitefc.simulacao import ZONAS_ANO, classificacao, simular
+from palpitefc.texto import resumo_do_jogo
 
 INTERVALO_RODADA = timedelta(hours=36)
 # O openfootball dá a todos os jogos de uma rodada a data do primeiro dia.
@@ -83,7 +85,35 @@ class Painel:
         for jogo in self.simulacao["impacto"]:
             jogo["agenda"] = self.agenda(jogo["casa"], jogo["fora"])
         self.rodadas = _rodadas(self.retro["jogos"])
+        self.impacto_por_par = {(jogo["casa"], jogo["fora"]): jogo for jogo in self.simulacao["impacto"]}
+        self._formas: dict[str, list[dict]] = {}
+        self._confrontos: dict[frozenset, dict] = {}
         self.proximos = self._proximos(feitos)
+
+    def forma_de(self, time: str) -> list[dict]:
+        if time not in self._formas:
+            # Só a temporada em exibição e a anterior contam como forma de hoje.
+            temporadas = {self.temporada, str(int(self.temporada) - 1)}
+            self._formas[time] = forma(self.jogos, time, temporadas=temporadas)
+        return self._formas[time]
+
+    def confronto_de(self, casa: str, fora: str) -> dict:
+        chave = frozenset((casa, fora))
+        if chave not in self._confrontos:
+            self._confrontos[chave] = confronto(self.jogos, casa, fora)
+        return self._confrontos[chave]
+
+    def _com_contexto(self, cartao: dict) -> dict:
+        """Forma dos dois times e o texto curto do jogo, só com números do site."""
+        casa, fora = cartao["casa"], cartao["fora"]
+        cartao["forma"] = {
+            "casa": [jogo["resultado"] for jogo in self.forma_de(casa)],
+            "fora": [jogo["resultado"] for jogo in self.forma_de(fora)],
+        }
+        cartao["texto"] = resumo_do_jogo(
+            cartao, self.forma_de(casa), self.forma_de(fora), self.confronto_de(casa, fora), self.impacto_por_par.get((casa, fora))
+        )
+        return cartao
 
     def hora_confirmada(self, casa: str, fora: str, quando: str) -> str:
         """Na madrugada em que o Reino Unido atrasa o relógio, a hora inglesa
@@ -124,7 +154,7 @@ class Painel:
     def _cartao(self, casa: str, fora: str, odds: dict | None = None) -> dict:
         cartao = avaliar(self.modelo, casa, fora, odds)
         cartao["agenda"] = self.agenda(casa, fora)
-        return cartao
+        return self._com_contexto(cartao)
 
     def _proximos(self, feitos: set[tuple[str, str]]) -> list[dict]:
         """Próxima rodada e jogos atrasados.
@@ -234,12 +264,15 @@ class Painel:
             raise KeyError(time)
         jogos = [self._cartao(casa, fora) for casa, fora in self.restantes if casa == time or fora == time]
         linha = next((linha for linha in self.simulacao["times"] if linha["id"] == time), None)
-        return {"time": time, "nome": nome_publico(time), "tabela": linha, "jogos": jogos}
+        return {"time": time, "nome": nome_publico(time), "tabela": linha, "forma": self.forma_de(time), "jogos": jogos}
 
     def simular(self, casa: str, fora: str) -> dict:
         if casa not in self.modelo.ataque or fora not in self.modelo.ataque or casa == fora:
             raise KeyError((casa, fora))
-        return avaliar(self.modelo, casa, fora, incluir_grade=True)
+        cartao = self._com_contexto(avaliar(self.modelo, casa, fora, incluir_grade=True))
+        cartao["confronto"] = self.confronto_de(casa, fora)
+        cartao["formaDetalhada"] = {"casa": self.forma_de(casa), "fora": self.forma_de(fora)}
+        return cartao
 
     def forca(self) -> list[dict]:
         linhas = []

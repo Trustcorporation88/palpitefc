@@ -62,9 +62,14 @@ function bloco(tag, classe, html) {
 }
 
 function nomeDaLeitura(jogo) {
-  if (jogo.maisProvavel === "casa") return `vitória do ${jogo.casaNome}`;
-  if (jogo.maisProvavel === "fora") return `vitória do ${jogo.foraNome}`;
+  // Sem artigo: "do Palmeiras", mas "da Chapecoense".
+  if (jogo.maisProvavel === "casa") return `${jogo.casaNome} vence`;
+  if (jogo.maisProvavel === "fora") return `${jogo.foraNome} vence`;
   return "empate";
+}
+
+function plural(quantos, singular, varios) {
+  return `${quantos} ${quantos === 1 ? singular : varios}`;
 }
 
 function dataCurta(iso) {
@@ -109,9 +114,9 @@ function cartao(jogo, rotulo = "Confronto restante") {
   artigo.innerHTML = `
     <header><span>${cabecalho(jogo, rotulo)}</span>${resultado}</header>
     <div class="confronto">
-      <div><b>${esc(jogo.casaNome)}</b><small>${decimal(jogo.golsEsperados.casa, 2)} gols esperados</small></div>
+      <div><b>${esc(jogo.casaNome)}</b><small>${decimal(jogo.golsEsperados.casa, 2)} gols esperados</small>${faixaDaForma(jogo.forma?.casa)}</div>
       <div class="x" aria-hidden="true">×</div>
-      <div><b>${esc(jogo.foraNome)}</b><small>${decimal(jogo.golsEsperados.fora, 2)} gols esperados</small></div>
+      <div><b>${esc(jogo.foraNome)}</b><small>${decimal(jogo.golsEsperados.fora, 2)} gols esperados</small>${faixaDaForma(jogo.forma?.fora)}</div>
     </div>
     <div class="barras">${barras}</div>
     ${comMercado ? `<p class="legenda"><i class="ponto modelo"></i>modelo <i class="ponto odd"></i>odd sem margem</p>` : ""}
@@ -124,14 +129,71 @@ function cartao(jogo, rotulo = "Confronto restante") {
   const chance = pct(jogo.chance[jogo.maisProvavel]);
   if (jogo.resultado) {
     leitura.textContent = jogo.acertouMaisProvavel
-      ? `A leitura (${nomeDaLeitura(jogo)}, ${chance}) acertou o 1X2.`
-      : `A leitura era ${nomeDaLeitura(jogo)}, ${chance}. Não saiu.`;
+      ? `Leitura certa no 1X2: ${nomeDaLeitura(jogo)}, ${chance}.`
+      : `Leitura: ${nomeDaLeitura(jogo)}, ${chance}. Não saiu.`;
     leitura.classList.add(jogo.acertouMaisProvavel ? "ok" : "erro");
   } else {
     leitura.textContent = `Leitura: ${nomeDaLeitura(jogo)}, ${chance}. Não é palpite de aposta.`;
   }
+  if (jogo.texto?.length) {
+    artigo.append(bloco("p", "resumo", jogo.texto.map(esc).join(" ")));
+  }
   artigo.append(leitura);
   return artigo;
+}
+
+const RESULTADOS = { V: "vitória", E: "empate", D: "derrota" };
+
+function faixaDaForma(letras) {
+  // Chega do mais recente para o mais antigo; a faixa mostra o mais recente à direita.
+  if (!letras?.length) return "";
+  const ordem = [...letras].reverse();
+  const periodo = ordem.length === 1 ? "Último jogo na Série A" : `Últimos ${ordem.length} jogos na Série A, do mais antigo ao mais recente`;
+  const descricao = `${periodo}: ${ordem.map((letra) => RESULTADOS[letra] || "").join(", ")}`;
+  return `<span class="forma" role="img" aria-label="${esc(descricao)}" title="${esc(descricao)}">${ordem
+    .map((letra) => `<i class="r-${esc(letra)}">${esc(letra)}</i>`)
+    .join("")}</span>`;
+}
+
+function listaDaForma(forma) {
+  if (!forma?.length) return "";
+  const linhas = forma
+    .map(
+      (jogo) =>
+        `<li><i class="r-${esc(jogo.resultado)}">${esc(jogo.resultado)}</i><span>${esc(quando(jogo.quando).split(" ·")[0])}/${esc(jogo.temporada.slice(2))}</span><span>${jogo.mando === "casa" ? "em casa" : "fora"} × ${esc(jogo.adversarioNome)}</span><b>${esc(jogo.golsPro)}–${esc(jogo.golsContra)}</b></li>`,
+    )
+    .join("");
+  const titulo = forma.length === 1 ? "Último jogo na Série A" : `Últimos ${forma.length} jogos na Série A`;
+  return `<h3>${titulo}</h3><ol class="lista-forma">${linhas}</ol>`;
+}
+
+function secaoConfronto(jogo) {
+  const dados = jogo.confronto;
+  if (!dados) return null;
+  const casa = jogo.casa;
+  const fora = jogo.fora;
+  const total = dados.jogos;
+  const largura = (valor) => (total ? ((valor / total) * 100).toFixed(1) : 0);
+  const resumo = total
+    ? `<p class="nota">Na Série A desde ${esc(dados.desde)}: ${total} ${total === 1 ? "jogo" : "jogos"}. Gols: ${esc(jogo.casaNome)} ${dados.gols[casa]}, ${esc(jogo.foraNome)} ${dados.gols[fora]}.</p>
+      <div class="placar-confronto" role="img" aria-label="${esc(jogo.casaNome)} ${plural(dados.vitorias[casa], "vitória", "vitórias")}, ${plural(dados.empates, "empate", "empates")}, ${esc(jogo.foraNome)} ${plural(dados.vitorias[fora], "vitória", "vitórias")}">
+        <i class="r-V" style="width:${largura(dados.vitorias[casa])}%"></i><i class="r-E" style="width:${largura(dados.empates)}%"></i><i class="r-D" style="width:${largura(dados.vitorias[fora])}%"></i>
+      </div>
+      <p class="legenda"><span>${esc(jogo.casaNome)} ${dados.vitorias[casa]}</span> · <span>empates ${dados.empates}</span> · <span>${esc(jogo.foraNome)} ${dados.vitorias[fora]}</span></p>
+      <ol class="lista-forma">${dados.ultimos
+        .map(
+          (partida) =>
+            `<li><span>${esc(quando(partida.quando).split(" ·")[0])}/${esc(partida.quando.slice(2, 4))}</span><span>${esc(partida.casaNome)} ${esc(partida.golsCasa)}–${esc(partida.golsFora)} ${esc(partida.foraNome)}</span></li>`,
+        )
+        .join("")}</ol>`
+    : `<p class="nota">Os dois não se enfrentaram na Série A da base, que começa em ${esc(dados.inicioDaBase)}.</p>`;
+  const formas = jogo.formaDetalhada || {};
+  return bloco(
+    "section",
+    "painel",
+    `<h2>Confronto direto</h2>${resumo}
+    <div class="duas-colunas"><div>${listaDaForma(formas.casa).replace("<h3>", `<h3>${esc(jogo.casaNome)} · `)}</div><div>${listaDaForma(formas.fora).replace("<h3>", `<h3>${esc(jogo.foraNome)} · `)}</div></div>`,
+  );
 }
 
 function heroRodada(resumo) {
@@ -382,7 +444,7 @@ async function paginaTimes() {
   const carregar = async () => {
     timeEscolhido = select.value;
     const dados = await api(`/api/time/${encodeURIComponent(select.value)}`);
-    painelEl.querySelector("#resumo-time").innerHTML = resumoDoTime(dados.tabela, tabela.zonas);
+    painelEl.querySelector("#resumo-time").innerHTML = resumoDoTime(dados.tabela, tabela.zonas) + listaDaForma(dados.forma);
     lista.replaceChildren(...dados.jogos.map((jogo) => cartao(jogo)));
   };
   select.addEventListener("change", carregar);
@@ -435,7 +497,7 @@ async function paginaSimular() {
         <div class="numero"><b>${pct(jogo.chance.mais35)}</b><span>mais de 3,5 gols</span></div>
       </div>`,
     );
-    saida.replaceChildren(cartao(jogo, "Simulação com a força de hoje"), extra);
+    saida.replaceChildren(...[cartao(jogo, "Simulação com a força de hoje"), extra, secaoConfronto(jogo)].filter(Boolean));
   };
   casa.addEventListener("change", calcular);
   fora.addEventListener("change", calcular);

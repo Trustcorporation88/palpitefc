@@ -24,6 +24,8 @@ def painel_de_teste(calendario, restantes, ultimo_jogo=datetime(2026, 10, 19, 22
     painel.calendario = {(jogo["casa"], jogo["fora"]): jogo for jogo in calendario}
     painel.restantes = restantes
     painel.ultimo_jogo = ultimo_jogo
+    painel.jogos, painel.impacto_por_par, painel._formas, painel._confrontos = [], {}, {}, {}
+    painel.temporada = "2026"
     times = sorted({time for par in restantes for time in par})
     painel.modelo = Modelo(times=times, ataque=dict.fromkeys(times, 0.0), defesa=dict.fromkeys(times, 0.0), mando=0.3, rho=-0.05)
     painel.proxima_rodada = painel._qual_a_proxima_rodada()

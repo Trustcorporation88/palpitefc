@@ -73,6 +73,17 @@ NOMES = {
     "Sao Paulo": "São Paulo",
     "Vasco": "Vasco",
     "Vitoria": "Vitória",
+    # Quem caiu nos últimos anos ainda aparece na forma e no confronto direto.
+    "America MG": "América-MG",
+    "Atletico GO": "Atlético-GO",
+    "Avai": "Avaí",
+    "Ceara": "Ceará",
+    "Criciuma": "Criciúma",
+    "Cuiaba": "Cuiabá",
+    "Fortaleza": "Fortaleza",
+    "Goias": "Goiás",
+    "Juventude": "Juventude",
+    "Sport Recife": "Sport",
 }
 
 

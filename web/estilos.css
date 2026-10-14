@@ -283,3 +283,19 @@ select {
   .grafico:not(.quadrado) text { font-size: 21px; }
   .grafico:not(.quadrado) .serie { stroke-width: 4; }
 }
+
+/* Forma recente e confronto direto */
+.forma { display: flex; gap: 3px; margin-top: 6px; }
+.confronto > div:last-child .forma { justify-content: flex-start; }
+.forma i, .lista-forma i { font-style: normal; font-size: 0.68rem; font-weight: 700; width: 18px; height: 18px; border-radius: 5px; display: inline-grid; place-items: center; color: #17200f; }
+.r-V { background: var(--ok); }
+.r-E { background: var(--mudo); }
+.r-D { background: var(--erro); }
+.resumo { color: var(--texto); font-size: 0.88rem; line-height: 1.5; margin: 10px 0 0; padding: 10px 12px; background: var(--fundo-fundo); border-radius: 12px; }
+.lista-forma { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 4px; font-size: 0.82rem; }
+.lista-forma li { display: grid; grid-template-columns: auto auto 1fr auto; gap: 8px; align-items: center; color: var(--mudo); }
+.lista-forma li b { color: var(--texto); font-variant-numeric: tabular-nums; }
+.placar-confronto { display: flex; height: 10px; border-radius: 99px; overflow: hidden; margin-top: 8px; background: var(--fundo-fundo); }
+.placar-confronto i { display: block; height: 100%; }
+.duas-colunas { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 6px; }
+@media (max-width: 520px) { .duas-colunas { grid-template-columns: 1fr; } }
