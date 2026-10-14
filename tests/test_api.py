@@ -30,6 +30,8 @@ class TesteApi(unittest.TestCase):
 
     def test_inicio_traz_notas(self):
         dados = self.cliente.get("/api/inicio").json()
+        self.assertRegex(dados["competicao"], r"^Brasileirão Série A \d{4}$")
+        self.assertIn(dados["fonteCalendario"], (None, "openfootball", "football-data.org"))
         notas = dados["resumo"]["notas"]
         self.assertLess(notas["modelo"]["rps"], notas["base"]["rps"])
         self.assertNotIn("calibracao", dados["resumo"])

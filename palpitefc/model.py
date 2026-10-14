@@ -300,17 +300,24 @@ def ajustar(
     promovidos: set[str] | frozenset[str] = frozenset(),
     deslocamento_promovido: float = PROMOVIDO_PADRAO,
     com_incerteza: bool = False,
+    times_extras: set[str] | frozenset[str] = frozenset(),
 ) -> Modelo:
     """Ajusta ataque, defesa, mando e rho. `jogos` traz casa, fora, gols e dias.
 
     `l2` puxa ataque e defesa para um centro: a média da liga, ou, para os
     `promovidos`, um ataque `deslocamento_promovido` abaixo e uma defesa o
     mesmo tanto acima. Segura o time que chega com poucos jogos na base.
+
+    `times_extras` entram mesmo sem jogo na base: no primeiro jogo de quem
+    acabou de subir, a força dele é o próprio centro, com a incerteza da
+    regularização. Sem `l2`, eles ficariam sem informação nenhuma.
     """
     if len(jogos) < 20:
         raise ValueError("Histórico curto demais para ajustar o modelo")
+    if times_extras and l2 <= 0:
+        raise ValueError("Time sem jogo na base precisa de regularização (l2 > 0)")
 
-    times = sorted({jogo["casa"] for jogo in jogos} | {jogo["fora"] for jogo in jogos})
+    times = sorted({jogo["casa"] for jogo in jogos} | {jogo["fora"] for jogo in jogos} | set(times_extras))
     indice = {time: pos for pos, time in enumerate(times)}
     n_times = len(times)
     dias = np.array([jogo["dias"] for jogo in jogos], dtype=float)

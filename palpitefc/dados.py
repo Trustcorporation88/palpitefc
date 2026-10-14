@@ -5,10 +5,15 @@ from __future__ import annotations
 import csv
 import json
 import re
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-TEMPORADA_ATUAL = "2026"
+# O football-data.co.uk publica a hora do Reino Unido: o jogo das 21h30 de
+# Brasília aparece à 01h30 do dia seguinte. Tudo é convertido na leitura.
+FUSO_DA_FONTE = ZoneInfo("Europe/London")
+FUSO_DO_SITE = ZoneInfo("America/Sao_Paulo")
 RODADAS = 38
 _DATA = re.compile(r"\d{4}-\d{2}-\d{2}")
 _HORA = re.compile(r"\d{2}:\d{2}")
@@ -88,14 +93,23 @@ def _odd(linha: dict, *colunas: str) -> float | None:
     return None
 
 
+def hora_de_brasilia(data: str, hora: str) -> datetime:
+    """Data e hora do football-data (Reino Unido) em hora de Brasília, sem fuso.
+
+    Sem hora publicada, fica o dia publicado ao meio-dia, sem conversão:
+    converter a meia-noite inglesa jogaria o jogo para a véspera.
+    """
+    if not hora.strip():
+        return datetime.strptime(f"{data.strip()} 12:00", "%d/%m/%Y %H:%M")
+    inglesa = datetime.strptime(f"{data.strip()} {hora.strip()}", "%d/%m/%Y %H:%M").replace(tzinfo=FUSO_DA_FONTE)
+    return inglesa.astimezone(FUSO_DO_SITE).replace(tzinfo=None)
+
+
 def carregar(caminho: Path = ARQUIVO) -> list[dict]:
     jogos: list[dict] = []
     with caminho.open(newline="", encoding="utf-8-sig") as arquivo:
         for linha in csv.DictReader(arquivo):
-            quando = datetime.strptime(
-                f"{linha['Date'].strip()} {linha['Time'].strip() or '00:00'}",
-                "%d/%m/%Y %H:%M",
-            )
+            quando = hora_de_brasilia(linha["Date"], linha["Time"])
             gols_casa = _numero(linha.get("HG", ""))
             gols_fora = _numero(linha.get("AG", ""))
             odd_casa = _odd(linha, "AvgCH", "MaxCH", "PSCH", "B365CH")
@@ -129,9 +143,7 @@ def carregar_proximos(caminho: Path = ARQUIVO_PROXIMOS) -> list[dict]:
                 continue
             jogos.append(
                 {
-                    "quando": datetime.strptime(
-                        f"{linha['Date'].strip()} {linha['Time'].strip() or '00:00'}", "%d/%m/%Y %H:%M"
-                    ),
+                    "quando": hora_de_brasilia(linha["Date"], linha.get("Time") or ""),
                     "casa": linha["Home"].strip(),
                     "fora": linha["Away"].strip(),
                     "odd_casa": _odd(linha, "AvgH", "B365H", "MaxH"),
@@ -141,6 +153,11 @@ def carregar_proximos(caminho: Path = ARQUIVO_PROXIMOS) -> list[dict]:
             )
     jogos.sort(key=lambda jogo: jogo["quando"])
     return jogos
+
+
+def temporada_atual(jogos: list[dict]) -> str:
+    """A temporada mais recente do arquivo. Na virada do ano, o site muda sozinho."""
+    return max(jogo["temporada"] for jogo in jogos)
 
 
 def promovidos(jogos: list[dict], temporada: str) -> frozenset[str]:
@@ -207,25 +224,75 @@ def converter_calendario(bruto: dict) -> list[dict]:
     return jogos
 
 
-def carregar_calendario(
-    caminho: Path = ARQUIVO_CALENDARIO, temporada: str = TEMPORADA_ATUAL
-) -> dict[tuple[str, str], dict]:
-    """(casa, fora) -> rodada, data e hora previstas.
+def carregar_calendario(temporada: str, caminho: Path = ARQUIVO_CALENDARIO) -> tuple[dict[tuple[str, str], dict], str | None]:
+    """(casa, fora) -> rodada, data e hora previstas, e a fonte do calendário.
 
     Sem arquivo, de outra temporada ou com campo inválido: vazio. O site
     continua sem as datas, em vez de cair.
     """
     if not caminho.exists():
-        return {}
+        return {}, None
     try:
         conteudo = json.loads(caminho.read_text(encoding="utf-8"))
         if conteudo.get("temporada") != temporada:
-            return {}
+            return {}, None
         jogos = [validar_jogo_do_calendario(jogo) for jogo in conteudo["jogos"]]
+        fonte = conteudo.get("fonte", "openfootball")
+        if fonte not in FONTES_DO_CALENDARIO:
+            raise ValueError(f"Fonte desconhecida: {fonte!r}")
     except (ValueError, KeyError, TypeError, AttributeError) as erro:
         print(f"Calendário ignorado: {erro}")
-        return {}
-    return {(jogo["casa"], jogo["fora"]): jogo for jogo in jogos}
+        return {}, None
+    return {(jogo["casa"], jogo["fora"]): jogo for jogo in jogos}, fonte
+
+
+# football-data.org: só com chave gratuita, mas é oficial e traz a hora assim
+# que a CBF confirma. Até lá o jogo fica SCHEDULED, com uma data provisória.
+FONTES_DO_CALENDARIO = ("openfootball", "football-data.org")
+STATUS_COM_HORA = {"TIMED", "IN_PLAY", "PAUSED", "FINISHED", "SUSPENDED", "AWARDED"}
+
+
+def _normalizado(texto: str) -> str:
+    sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]", "", sem_acento.lower())
+
+
+def _time_do_football_data_org(time: dict) -> str:
+    nome = str(time.get("name") or "")
+    if nome in NOMES_OPENFOOTBALL:
+        return NOMES_OPENFOOTBALL[nome]
+    procurados = {_normalizado(str(time.get(campo) or "")) for campo in ("name", "shortName")} - {""}
+    for identificador, publico in NOMES.items():
+        if procurados & {_normalizado(identificador), _normalizado(publico)}:
+            return identificador
+    raise ValueError(f"Time sem tradução no football-data.org: {nome!r}")
+
+
+def converter_football_data_org(bruto: dict) -> list[dict]:
+    """Do formato da API v4 do football-data.org para o calendário do site."""
+    jogos = []
+    for jogo in bruto["matches"]:
+        status = jogo.get("status")
+        utc = datetime.fromisoformat(str(jogo["utcDate"]).replace("Z", "+00:00"))
+        if status in STATUS_COM_HORA:
+            local = utc.astimezone(FUSO_DO_SITE)
+            data, hora = local.strftime("%Y-%m-%d"), local.strftime("%H:%M")
+        else:
+            # Data provisória: a hora não vale, e converter a mudaria de dia.
+            data, hora = utc.strftime("%Y-%m-%d"), None
+        jogos.append(
+            validar_jogo_do_calendario(
+                {
+                    "rodada": jogo.get("matchday"),
+                    "data": data,
+                    "hora": hora,
+                    "casa": _time_do_football_data_org(jogo["homeTeam"]),
+                    "fora": _time_do_football_data_org(jogo["awayTeam"]),
+                    "adiado": status == "POSTPONED",
+                }
+            )
+        )
+    return jogos
 
 
 def para_ajuste(jogos: list[dict], agora: datetime) -> list[dict]:

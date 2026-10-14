@@ -8,13 +8,13 @@ from datetime import date, datetime, timedelta
 
 from palpitefc.conferir_tabela import ARQUIVO as CONFERENCIA_TABELA
 from palpitefc.dados import (
-    TEMPORADA_ATUAL,
     carregar,
     carregar_calendario,
     carregar_proximos,
     nome_publico,
     para_ajuste,
     promovidos,
+    temporada_atual,
 )
 from palpitefc.metricas import media_das_notas
 from palpitefc.model import L2_PADRAO, PROMOVIDO_PADRAO, XI_DECAIMENTO, ajustar
@@ -23,18 +23,19 @@ from palpitefc.retrospectiva import ARQUIVO as RETRO_ARQUIVO
 from palpitefc.retrospectiva import JANELA
 from palpitefc.simulacao import classificacao, simular
 
-TEMPORADA = TEMPORADA_ATUAL
 INTERVALO_RODADA = timedelta(hours=36)
 # O openfootball dá a todos os jogos de uma rodada a data do primeiro dia.
 # Jogo pendente com data prevista mais antiga que o último resultado menos
 # essa folga ficou para trás: foi adiado.
 FOLGA_ATRASO = timedelta(days=3)
 IMPACTOS_EXIBIDOS = 10
+TIMES_NA_SERIE_A = 20
 
 
 class Painel:
     def __init__(self) -> None:
         self.jogos = carregar()
+        self.temporada = temporada_atual(self.jogos)
         self.retro = json.loads(RETRO_ARQUIVO.read_text(encoding="utf-8"))
         self.conferencia_tabela = (
             json.loads(CONFERENCIA_TABELA.read_text(encoding="utf-8")) if CONFERENCIA_TABELA.exists() else None
@@ -47,29 +48,37 @@ class Painel:
             for jogo in self.jogos
             if jogo["gols_casa"] is not None and agora - jogo["quando"] <= JANELA
         ]
+        da_temporada = [jogo for jogo in self.jogos if jogo["temporada"] == self.temporada]
+        self.calendario, self.fonte_calendario = carregar_calendario(self.temporada)
+        # Na primeira rodada, só o calendário conhece os 20 times.
+        do_arquivo = {jogo["casa"] for jogo in da_temporada} | {jogo["fora"] for jogo in da_temporada}
+        juntos = do_arquivo | {lado for par in self.calendario for lado in par}
+        if len(juntos) > TIMES_NA_SERIE_A:
+            # Nome traduzido errado criaria um clube a mais na tabela.
+            print(f"Calendário ignorado: {len(juntos)} times somando o calendário ao arquivo")
+            self.calendario, self.fonte_calendario, juntos = {}, None, do_arquivo
+        self.times_temporada = sorted(juntos)
         self.modelo = ajustar(
             para_ajuste(historico, agora),
             XI_DECAIMENTO,
             L2_PADRAO,
-            promovidos(self.jogos, TEMPORADA),
+            promovidos(self.jogos, self.temporada),
             PROMOVIDO_PADRAO,
             com_incerteza=True,
+            times_extras=frozenset(self.times_temporada),
         )
-        da_temporada = [jogo for jogo in self.jogos if jogo["temporada"] == TEMPORADA]
-        self.times_2026 = sorted({jogo["casa"] for jogo in da_temporada} | {jogo["fora"] for jogo in da_temporada})
         feitos = {(jogo["casa"], jogo["fora"]) for jogo in da_temporada if jogo["gols_casa"] is not None}
-        self.calendario = carregar_calendario()
         self.restantes = sorted(
             (
                 (casa, fora)
-                for casa in self.times_2026
-                for fora in self.times_2026
-                if casa != fora and (casa, fora) not in feitos and casa in self.modelo.ataque and fora in self.modelo.ataque
+                for casa in self.times_temporada
+                for fora in self.times_temporada
+                if casa != fora and (casa, fora) not in feitos
             ),
             key=self._ordem,
         )
         self.proxima_rodada = self._qual_a_proxima_rodada()
-        self.classificacao = classificacao(da_temporada, self.times_2026)
+        self.classificacao = classificacao(da_temporada, self.times_temporada)
         self.simulacao = simular(self.modelo, self.classificacao, self.restantes)
         for jogo in self.simulacao["impacto"]:
             jogo["agenda"] = self.agenda(jogo["casa"], jogo["fora"])
@@ -143,11 +152,12 @@ class Painel:
         return cartoes
 
     def times(self) -> list[dict[str, str]]:
-        return [{"id": time, "nome": nome_publico(time)} for time in self.times_2026]
+        return [{"id": time, "nome": nome_publico(time)} for time in self.times_temporada]
 
     def inicio(self) -> dict:
         return {
-            "competicao": f"Brasileirão Série A {TEMPORADA}",
+            "competicao": f"Brasileirão Série A {self.temporada}",
+            "fonteCalendario": self.fonte_calendario,
             "fonte": "football-data.co.uk",
             "atualizadoEm": self.ultimo_jogo.isoformat(timespec="minutes"),
             "resumo": _sem_calibracao(self.retro["resumo"]),
@@ -201,7 +211,7 @@ class Painel:
         }
 
     def do_time(self, time: str) -> dict:
-        if time not in self.times_2026:
+        if time not in self.times_temporada:
             raise KeyError(time)
         jogos = [self._cartao(casa, fora) for casa, fora in self.restantes if casa == time or fora == time]
         linha = next((linha for linha in self.simulacao["times"] if linha["id"] == time), None)
@@ -214,7 +224,7 @@ class Painel:
 
     def forca(self) -> list[dict]:
         linhas = []
-        for time in self.times_2026:
+        for time in self.times_temporada:
             if time not in self.modelo.ataque:
                 continue
             linhas.append(

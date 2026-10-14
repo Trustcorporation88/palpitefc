@@ -10,7 +10,8 @@ compara com a classificação final de verdade. Notas, menor é melhor:
 
 A referência ingênua é "a tabela de hoje fica como está". A escala da
 incerteza dos parâmetros é escolhida pelo menor RPS em 2013-2019 e conferida
-em 2020-2025, que não entram na escolha.
+em 2020-2023. 2024 e 2025 ficam de fora das duas: xi, l2 e o centro do
+promovido foram escolhidos nelas, e a prova não pode ter visto a resposta.
 
     python -m palpitefc.conferir_tabela
 """
@@ -29,7 +30,7 @@ from palpitefc.simulacao import ZONAS, classificacao, distribuicao_de_posicoes, 
 
 ARQUIVO = PASTA / "conferencia_tabela.json"
 TEMPORADAS_DE_ESCOLHA = tuple(str(ano) for ano in range(2013, 2020))
-TEMPORADAS_DE_PROVA = tuple(str(ano) for ano in range(2020, 2026))
+TEMPORADAS_DE_PROVA = tuple(str(ano) for ano in range(2020, 2024))
 RODADAS_DE_CORTE = (5, 10, 19, 28)
 GRADE_ESCALA = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0)
 SIMULACOES = 4000

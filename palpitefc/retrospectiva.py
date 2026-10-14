@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from palpitefc.dados import PASTA, carregar, para_ajuste, promovidos
+from palpitefc.dados import PASTA, carregar, para_ajuste, promovidos, temporada_atual
 from palpitefc.metricas import MERCADOS, calibracao, media_das_notas, notas
 from palpitefc.model import L2_PADRAO, PROMOVIDO_PADRAO, XI_DECAIMENTO, ajustar
 from palpitefc.palpite import avaliar
@@ -126,6 +126,9 @@ def prever_temporada(
     com o que havia antes da meia-noite; serve para a busca de parâmetros."""
     prontos = prontos or {}
     subiram = promovidos(jogos, temporada)
+    # Os 20 times são conhecidos antes do primeiro jogo; quem não tem
+    # histórico entra com o centro da regularização em vez de ficar de fora.
+    participantes = frozenset(lado for jogo in jogos if jogo["temporada"] == temporada for lado in (jogo["casa"], jogo["fora"]))
     modelos: dict[datetime, object] = {}
     cartoes = []
     for jogo in jogos:
@@ -140,11 +143,10 @@ def prever_temporada(
         corte = datetime.combine(jogo["quando"].date(), datetime.min.time()) if por_dia else jogo["quando"]
         historico = historico_ate(jogos, corte, janela)
         base = para_ajuste(historico, corte)
-        times_vistos = {item["casa"] for item in base} | {item["fora"] for item in base}
-        if jogo["casa"] not in times_vistos or jogo["fora"] not in times_vistos or len(base) < MINIMO_JOGOS:
+        if len(base) < MINIMO_JOGOS:
             continue
         if corte not in modelos:
-            modelos[corte] = ajustar(base, xi, l2, subiram, promovido)
+            modelos[corte] = ajustar(base, xi, l2, subiram, promovido, times_extras=participantes)
 
         odds = {"casa": jogo["odd_casa"], "empate": jogo["odd_empate"], "fora": jogo["odd_fora"]}
         cartao = avaliar(modelos[corte], jogo["casa"], jogo["fora"], odds, marcar_vantagem=True)
@@ -235,8 +237,9 @@ def resumir(avaliacoes: list[dict]) -> dict:
     }
 
 
-def construir(temporada: str = "2026", anterior: dict | None = None) -> dict:
+def construir(temporada: str | None = None, anterior: dict | None = None) -> dict:
     jogos = carregar()
+    temporada = temporada or temporada_atual(jogos)
     historico, por_jogo = impressoes(jogos, temporada)
     config = {**configuracao(), "historico": historico}
     prontos = {}

@@ -123,6 +123,26 @@ class TesteModelo(unittest.TestCase):
         self.assertGreater(desvio, 0)
         self.assertEqual(muito.amostras(3, 0.0, rng), [muito] * 3)
 
+    def test_time_sem_jogo_entra_com_o_centro(self):
+        jogos = []
+        # "Novo" vem antes na ordem alfabética: o último time não tem
+        # parâmetro livre (fecha a soma zero) e não teria linha própria.
+        times = ["P", "Q", "R", "S"]
+        for rodada in range(10):
+            for casa in times:
+                for fora in times:
+                    if casa != fora:
+                        jogos.append({"casa": casa, "fora": fora, "gols_casa": 1 + rodada % 2, "gols_fora": 1, "dias": 30.0})
+        modelo = ajustar(jogos, l2=10.0, promovidos={"Novo"}, deslocamento_promovido=0.1, com_incerteza=True, times_extras={"Novo"})
+        # Ataques somam zero: o centro efetivo é o centro menos a média dos
+        # centros dos 5 times, -0,1 + 0,1/5 = -0,08.
+        self.assertAlmostEqual(modelo.ataque["Novo"], -0.08, delta=0.005)
+        self.assertAlmostEqual(modelo.defesa["Novo"], 0.08, delta=0.005)
+        posicao = modelo.times.index("Novo")
+        self.assertGreater(modelo.covariancia[posicao, posicao], 0.01)
+        with self.assertRaises(ValueError):
+            ajustar(jogos, l2=0.0, times_extras={"Novo"})
+
     def test_promovido_comeca_abaixo_da_media(self):
         jogos = []
         times = ["A", "B", "C", "D"]

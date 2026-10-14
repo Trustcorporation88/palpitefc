@@ -7,7 +7,8 @@ on:
 
 jobs:
   testes:
-    runs-on: ubuntu-latest
+    # Fixo: o ubuntu-latest passa para o Ubuntu 26 em outubro de 2026.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

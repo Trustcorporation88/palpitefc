@@ -1,11 +1,13 @@
 name: Atualizar dados
 
 # O football-data atualiza o Brasileirão no domingo e na quarta à noite, e os
-# próximos jogos na terça e na sexta. Rodar todo dia pega tudo; quando nada
-# muda, não há commit nem deploy.
+# próximos jogos na terça e na sexta à tarde (hora inglesa). Rodar de manhã e
+# no fim da tarde (07h15 e 17h30 de Brasília) pega cada publicação no mesmo
+# dia; quando nada muda, não há commit nem deploy.
 on:
   schedule:
     - cron: "15 10 * * *"
+    - cron: "30 20 * * *"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +19,8 @@ concurrency:
 
 jobs:
   atualizar:
-    runs-on: ubuntu-latest
+    # Fixo: o ubuntu-latest passa para o Ubuntu 26 em outubro de 2026.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -28,6 +31,10 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Baixar e refazer a conferência
         run: python -m palpitefc.atualizar
+        env:
+          # Opcional: com a chave gratuita do football-data.org, o calendário
+          # vem dele (oficial, com hora). Sem ela, vem do openfootball.
+          FOOTBALL_DATA_ORG_TOKEN: ${{ secrets.FOOTBALL_DATA_ORG_TOKEN }}
       - name: Testes
         run: python -m unittest discover -s tests -t .
       - name: Publicar

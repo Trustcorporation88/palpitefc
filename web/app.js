@@ -149,6 +149,11 @@ function heroRodada(resumo) {
   );
 }
 
+const FONTES = {
+  "football-data.org": "Data e hora do football-data.org; a hora aparece quando a CBF confirma.",
+  openfootball: "Data prevista pelo calendário do openfootball, que atrasa algumas semanas; a CBF ainda pode mudar.",
+};
+
 async function paginaRodada() {
   const pedacos = [heroRodada(inicio.resumo)];
   if (inicio.proximos?.length) {
@@ -158,7 +163,7 @@ async function paginaRodada() {
       : "A chance da casa de aposta aparece quando o football-data publica as odds, às terças e sextas.";
     pedacos.push(
       bloco("h2", "", inicio.proximaRodada ? `Próxima rodada · ${esc(inicio.proximaRodada)}ª` : "Próximos jogos"),
-      bloco("p", "nota", `Data prevista pelo calendário da temporada; a CBF ainda pode mudar. ${odd} Não é palpite de aposta.`),
+      bloco("p", "nota", `${FONTES[inicio.fonteCalendario] || "Datas e horas do football-data.co.uk."} ${odd} Não é palpite de aposta.`),
     );
     inicio.proximos.forEach((jogo) => pedacos.push(cartao(jogo)));
   }
@@ -527,8 +532,12 @@ function secaoConferenciaTabela(conferencia) {
   const linha = (rotulo, notas) =>
     `<tr><td>${rotulo}</td><td>${decimal(notas.rps, 4)}</td><td>${decimal(notas.titulo, 3)}</td><td>${decimal(notas.libertadores, 3)}</td><td>${decimal(notas.rebaixamento, 3)}</td></tr>`;
   const zonas = { titulo: "título", libertadores: "G4", rebaixamento: "Z4" };
-  const melhora = Object.keys(zonas).filter((zona) => comIncerteza[zona] < semIncerteza[zona]).map((zona) => zonas[zona]);
-  const piora = Object.keys(zonas).filter((zona) => comIncerteza[zona] >= semIncerteza[zona]).map((zona) => zonas[zona]);
+  // Diferença menor que meio milésimo de Brier é empate, não melhora nem piora.
+  const limiar = 0.0005;
+  const efeito = (zona) => comIncerteza[zona] - semIncerteza[zona];
+  const melhora = Object.keys(zonas).filter((zona) => efeito(zona) < -limiar).map((zona) => zonas[zona]);
+  const piora = Object.keys(zonas).filter((zona) => efeito(zona) > limiar).map((zona) => zonas[zona]);
+  const empata = Object.keys(zonas).filter((zona) => Math.abs(efeito(zona)) <= limiar).map((zona) => zonas[zona]);
   const anos = conferencia.config.temporadasDeProva;
   const anosEscolha = conferencia.config.temporadasDeEscolha;
   return bloco(
@@ -541,7 +550,7 @@ function secaoConferenciaTabela(conferencia) {
       ${linha("Sem incerteza", semIncerteza)}
       ${linha("Tabela de hoje fica como está", hoje)}
     </tbody></table></div>
-    <p class="nota">A escala da incerteza foi escolhida em ${anosEscolha[0]}–${anosEscolha.at(-1)}. Na prova, ela ${comIncerteza.rps < semIncerteza.rps ? "melhora" : "não melhora"} o RPS da posição${melhora.length ? ` e o Brier ${lista(melhora.map((zona) => `do ${zona}`))}` : ""}${piora.length ? `; ${lista(piora.map((zona) => `no ${zona}`))}, piora um pouco` : ""}.</p>`,
+    <p class="nota">A escala da incerteza foi escolhida em ${anosEscolha[0]}–${anosEscolha.at(-1)}. Na prova, ela ${comIncerteza.rps < semIncerteza.rps ? "melhora" : "não melhora"} o RPS da posição${melhora.length ? ` e o Brier ${lista(melhora.map((zona) => `do ${zona}`))}` : ""}${empata.length ? `; ${lista(empata.map((zona) => `no ${zona}`))}, fica igual` : ""}${piora.length ? `; ${lista(piora.map((zona) => `no ${zona}`))}, piora um pouco` : ""}.</p>`,
   );
 }
 
@@ -695,6 +704,7 @@ function dadosProntos() {
     pedidoInicial = Promise.all([api("/api/inicio"), api("/api/times").then((dados) => dados.times)])
       .then(([painelInicial, listaTimes]) => {
         inicio = painelInicial;
+        document.querySelector("#competicao").textContent = inicio.competicao;
         times = listaTimes;
       })
       .catch((erro) => {

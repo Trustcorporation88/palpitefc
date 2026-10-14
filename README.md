@@ -29,13 +29,13 @@ A força de cada time não é conhecida com exatidão. A covariância dos parâm
 
 `python -m palpitefc.conferir_tabela` confere a simulação em temporadas que já acabaram: corta cada uma depois de 5, 10, 19 e 28 rodadas, ajusta o modelo só com o que havia até ali e compara a chance de cada posição com a classificação final.
 
-| Prova 2020–2025 (menor é melhor) | RPS da posição | Brier título | Brier G4 | Brier Z4 |
+| Prova 2020–2023 (menor é melhor) | RPS da posição | Brier título | Brier G4 | Brier Z4 |
 | --- | --- | --- | --- | --- |
-| Com incerteza (escala 1,5) | 0,0993 | 0,036 | 0,087 | 0,111 |
-| Sem incerteza | 0,1012 | 0,036 | 0,087 | 0,116 |
-| Tabela de hoje fica como está | 0,1601 | 0,071 | 0,117 | 0,154 |
+| Com incerteza (escala 1,5) | 0,0935 | 0,0355 | 0,0973 | 0,1025 |
+| Sem incerteza | 0,0940 | 0,0355 | 0,0974 | 0,1046 |
+| Tabela de hoje fica como está | 0,1526 | 0,0688 | 0,1313 | 0,1313 |
 
-A escala 1,5 foi escolhida só em 2013–2019, e na prova melhora as quatro notas (as de título e G4 por pouco). Uma ressalva: xi, l2 e o centro do promovido foram escolhidos em 2024–2025, que estão dentro desta prova.
+A escala 1,5 foi escolhida em 2013–2019. Na prova, melhora o RPS da posição e o Brier do Z4, e empata no título e no G4. A prova para em 2023 de propósito: xi, l2 e o centro do promovido foram escolhidos em 2024–2025, e uma prova que já viu a resposta não prova nada.
 
 A curva de pontos necessários junta todos os times de todas as simulações: de quem terminou com tantos pontos, quantos foram campeões, ficaram no G4 ou escaparam do Z4.
 
@@ -43,13 +43,13 @@ A curva de pontos necessários junta todos os times de todas as simulações: de
 
 Está em `data/retrospectiva.json`. Cada jogo foi calculado só com resultados anteriores.
 
-| Previsão (297 jogos até 13/10) | RPS | Brier | Log loss |
+| Previsão (299 jogos até 12/10) | RPS | Brier | Log loss |
 | --- | --- | --- | --- |
-| Odd de fechamento sem margem | 0,197 | 0,597 | 0,997 |
-| PalpiteFC | 0,204 | 0,614 | 1,022 |
-| Média da liga | 0,218 | 0,639 | 1,059 |
+| Odd de fechamento sem margem | 0,197 | 0,597 | 0,996 |
+| PalpiteFC | 0,204 | 0,613 | 1,020 |
+| Média da liga | 0,217 | 0,637 | 1,057 |
 
-Menor é melhor. A odd foi melhor que o modelo por 0,0072 de RPS, com intervalo de 95% entre 0,001 e 0,014 (bootstrap pareado). O modelo bate a média da liga com folga, e a regra de "vantagem sobre a odd" perdeu dinheiro. Por isso o site publica a chance e não marca palpite de aposta.
+Menor é melhor. A odd foi melhor que o modelo por 0,0070 de RPS, com intervalo de 95% entre 0,001 e 0,013 (bootstrap pareado). Time que subiu sem histórico na base entra com o centro do promovido desde o primeiro jogo, então nenhum jogo da temporada fica de fora. O modelo bate a média da liga com folga, e a regra de "vantagem sobre a odd" perdeu dinheiro. Por isso o site publica a chance e não marca palpite de aposta.
 
 Para comparar: no Brasileirão 2021, um estudo da FGV mediu RPS de 0,205 para a casa de aposta, 0,205 para o FiveThirtyEight, 0,210 para o Chance de Gol e 0,218 para o modelo da UFMG ([pôster](https://eventos.fgv.br/sites/eventos.fgv.br/files/arquivos/u1252/poster_flavio_fontanella.pdf)). São temporadas diferentes, então a comparação é só de ordem de grandeza.
 
@@ -65,15 +65,30 @@ Precisa de Python 3.12 ou mais novo (o scipy 1.18 exige).
 
 ## Atualizar os dados
 
-Os resultados, as odds e os próximos jogos vêm do [football-data.co.uk](https://www.football-data.co.uk/). O calendário da temporada, com rodada e data prevista, vem do [openfootball](https://github.com/openfootball/football.json) (domínio público). Ele atrasa algumas semanas, então a data é só a prevista; quando o football-data lista o jogo, a data dele vale mais.
+Os resultados, as odds e os próximos jogos vêm do [football-data.co.uk](https://www.football-data.co.uk/), que publica a hora do Reino Unido; o site converte tudo para a hora de Brasília na leitura.
+
+O calendário da temporada, com rodada e data, vem de uma de duas fontes:
+
+- [football-data.org](https://www.football-data.org/), se houver a variável `FOOTBALL_DATA_ORG_TOKEN`. É oficial e traz a hora assim que a CBF confirma. A chave é gratuita: crie a conta em football-data.org/client/register e cadastre a chave no GitHub em Settings → Secrets and variables → Actions, com o nome `FOOTBALL_DATA_ORG_TOKEN`.
+- [openfootball](https://github.com/openfootball/football.json) (domínio público), sem chave nenhuma. Atrasa algumas semanas e põe na rodada inteira a data do primeiro dia, por isso o site mostra "a partir de".
+
+Se a fonte com chave falhar, o openfootball entra no lugar. Em qualquer caso, a data e a hora do football-data.co.uk valem mais quando ele lista o jogo, às terças e sextas.
 
 ```bash
 python -m palpitefc.atualizar
 ```
 
-O comando baixa os três arquivos, confere se o de resultados não perdeu jogos e refaz só a parte nova da conferência. Para recalcular tudo do zero, use `python -m palpitefc.retrospectiva --do-zero`. Depois de mudar o modelo, rode também `python -m palpitefc.calibrar` e `python -m palpitefc.conferir_tabela`.
+O comando baixa os três arquivos, confere se o de resultados não perdeu jogos e refaz só a parte nova da conferência. Cada campo do calendário é validado antes de chegar à página. Para recalcular tudo do zero, use `python -m palpitefc.retrospectiva --do-zero`. Depois de mudar o modelo, rode também `python -m palpitefc.calibrar` e `python -m palpitefc.conferir_tabela`.
 
-O workflow `Atualizar dados` roda a atualização todo dia às 07h15 de Brasília e faz commit só quando há dado novo. O deploy do Railway parte desse commit.
+O workflow `Atualizar dados` roda a atualização todo dia às 07h15 e às 17h30 de Brasília e faz commit só quando há dado novo. A rodada da tarde pega no mesmo dia a lista de próximos jogos que o football-data publica às terças e sextas. O deploy do Railway parte desse commit.
+
+## Virada de temporada
+
+A temporada do site é a mais recente do `BRA.csv`: quando o primeiro jogo de 2027 entrar, o site muda sozinho, e o calendário passa a ser baixado para 2027. Time sem histórico na base entra com o centro do promovido. O que precisa de gente, em janeiro:
+
+- conferir as vagas da CBF para o ano novo em `ZONAS` (`palpitefc/simulacao.py`);
+- incluir os times novos em `NOMES` e `NOMES_OPENFOOTBALL` (`palpitefc/dados.py`); sem isso, o calendário é ignorado e o nome aparece como no CSV;
+- revisar o texto do termo de uso em `web/index.html`, que cita a temporada 2026.
 
 ## Deploy
 

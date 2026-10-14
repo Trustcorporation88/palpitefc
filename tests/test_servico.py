@@ -65,6 +65,16 @@ class TesteAgenda(unittest.TestCase):
         self.assertEqual([(cartao["casa"], cartao["fora"]) for cartao in cartoes], [("Vasco", "Bahia")])
 
 
+class TestePainelDeVerdade(unittest.TestCase):
+    def test_time_fantasma_do_calendario_nao_entra_na_tabela(self):
+        fantasma = {("Fantasma FC", "Palmeiras"): jogo_do_calendario("Fantasma FC", "Palmeiras", 31, "2026-10-17")}
+        with mock.patch.object(servico, "carregar_calendario", return_value=(fantasma, "openfootball")):
+            painel = servico.Painel()
+        self.assertEqual(len(painel.times_temporada), 20)
+        self.assertNotIn("Fantasma FC", painel.times_temporada)
+        self.assertEqual((painel.calendario, painel.fonte_calendario), ({}, None))
+
+
 class TesteCalendarioSeguro(unittest.TestCase):
     def test_recusa_campos_fora_do_formato(self):
         valido = jogo_do_calendario("Palmeiras", "Flamengo RJ", 31, "2026-10-17", "16:00")
@@ -87,12 +97,15 @@ class TesteCalendarioSeguro(unittest.TestCase):
         with tempfile.TemporaryDirectory() as pasta:
             caminho = Path(pasta) / "calendario.json"
             caminho.write_text(json.dumps({"temporada": "2026", "jogos": [valido]}), encoding="utf-8")
-            self.assertEqual(len(carregar_calendario(caminho, "2026")), 1)
-            self.assertEqual(carregar_calendario(caminho, "2027"), {})
+            jogos, fonte = carregar_calendario("2026", caminho)
+            self.assertEqual((len(jogos), fonte), (1, "openfootball"))
+            self.assertEqual(carregar_calendario("2027", caminho), ({}, None))
             caminho.write_text(json.dumps({"temporada": "2026", "jogos": [{**valido, "data": None}]}), encoding="utf-8")
-            self.assertEqual(carregar_calendario(caminho, "2026"), {})
+            self.assertEqual(carregar_calendario("2026", caminho), ({}, None))
+            caminho.write_text(json.dumps({"temporada": "2026", "fonte": "<script>", "jogos": [valido]}), encoding="utf-8")
+            self.assertEqual(carregar_calendario("2026", caminho), ({}, None))
             caminho.write_text("[1, 2, 3]", encoding="utf-8")
-            self.assertEqual(carregar_calendario(caminho, "2026"), {})
+            self.assertEqual(carregar_calendario("2026", caminho), ({}, None))
 
 
 class TesteEscala(unittest.TestCase):

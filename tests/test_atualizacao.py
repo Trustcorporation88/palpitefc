@@ -4,7 +4,51 @@ import unittest
 from pathlib import Path
 
 from palpitefc.atualizar import gravar_calendario, gravar_proximos
+from palpitefc.dados import converter_calendario, converter_football_data_org, hora_de_brasilia, temporada_atual
 from palpitefc.retrospectiva import primeira_mudanca
+
+
+class TesteFusoETemporada(unittest.TestCase):
+    def test_hora_inglesa_vira_hora_de_brasilia(self):
+        # Horário de verão inglês: 4 horas de diferença.
+        self.assertEqual(str(hora_de_brasilia("13/10/2026", "01:00")), "2026-10-12 21:00:00")
+        # Inverno inglês: 3 horas.
+        self.assertEqual(str(hora_de_brasilia("11/03/2026", "00:30")), "2026-03-10 21:30:00")
+        self.assertEqual(str(hora_de_brasilia("01/11/2026", "01:30")), "2026-10-31 22:30:00")
+        # Sem hora, o dia publicado não muda.
+        self.assertEqual(str(hora_de_brasilia("18/10/2026", "")), "2026-10-18 12:00:00")
+
+    def test_temporada_mais_recente(self):
+        self.assertEqual(temporada_atual([{"temporada": "2025"}, {"temporada": "2027"}, {"temporada": "2026"}]), "2027")
+
+
+class TesteFootballDataOrg(unittest.TestCase):
+    def jogo(self, status, utc, casa="SE Palmeiras", fora="CR Flamengo", rodada=31):
+        return {"status": status, "utcDate": utc, "matchday": rodada, "homeTeam": {"name": casa}, "awayTeam": {"name": fora}}
+
+    def test_converte_hora_so_quando_confirmada(self):
+        jogos = converter_football_data_org(
+            {
+                "matches": [
+                    self.jogo("TIMED", "2026-10-19T00:30:00Z"),
+                    self.jogo("SCHEDULED", "2026-10-25T00:00:00Z", "Botafogo FR", "Santos FC", 32),
+                    self.jogo("POSTPONED", "2026-07-29T22:00:00Z", "Chapecoense AF", "CR Vasco da Gama", 21),
+                ]
+            }
+        )
+        self.assertEqual((jogos[0]["data"], jogos[0]["hora"], jogos[0]["casa"]), ("2026-10-18", "21:30", "Palmeiras"))
+        self.assertEqual((jogos[1]["data"], jogos[1]["hora"]), ("2026-10-25", None))
+        self.assertTrue(jogos[2]["adiado"])
+
+    def test_acha_o_time_pelo_nome_curto(self):
+        jogos = converter_football_data_org(
+            {"matches": [{**self.jogo("TIMED", "2026-10-19T00:30:00Z"), "homeTeam": {"name": "Sociedade Esportiva Palmeiras", "shortName": "Palmeiras"}}]}
+        )
+        self.assertEqual(jogos[0]["casa"], "Palmeiras")
+
+    def test_time_desconhecido_derruba_a_conversao(self):
+        with self.assertRaises(ValueError):
+            converter_football_data_org({"matches": [self.jogo("TIMED", "2026-10-19T00:30:00Z", "Sport Club do Recife")]})
 
 
 class TesteRetrospectivaIncremental(unittest.TestCase):
@@ -43,13 +87,13 @@ class TesteProximosBaixados(unittest.TestCase):
             self.assertNotIn("Miami", destino.read_text(encoding="utf-8"))
 
     def test_calendario_curto_e_recusado(self):
-        bruto = json.dumps(
+        jogos = converter_calendario(
             {"matches": [{"round": "Matchday 1", "date": "2026-01-28", "team1": "SE Palmeiras", "team2": "CR Flamengo"}]}
-        ).encode("utf-8")
+        )
         with tempfile.TemporaryDirectory() as pasta:
             destino = Path(pasta) / "calendario.json"
             with self.assertRaises(ValueError):
-                gravar_calendario(bruto, destino)
+                gravar_calendario(jogos, "2026", destino=destino)
             self.assertFalse(destino.exists())
 
     def test_recusa_pagina_de_erro(self):
