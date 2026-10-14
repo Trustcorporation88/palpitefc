@@ -314,10 +314,11 @@ def ajustar(
     """
     if len(jogos) < 20:
         raise ValueError("Histórico curto demais para ajustar o modelo")
-    if times_extras and l2 <= 0:
+    com_jogo = {jogo["casa"] for jogo in jogos} | {jogo["fora"] for jogo in jogos}
+    if set(times_extras) - com_jogo and l2 <= 0:
         raise ValueError("Time sem jogo na base precisa de regularização (l2 > 0)")
 
-    times = sorted({jogo["casa"] for jogo in jogos} | {jogo["fora"] for jogo in jogos} | set(times_extras))
+    times = sorted(com_jogo | set(times_extras))
     indice = {time: pos for pos, time in enumerate(times)}
     n_times = len(times)
     dias = np.array([jogo["dias"] for jogo in jogos], dtype=float)

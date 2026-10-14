@@ -38,6 +38,7 @@ ESCALA_INCERTEZA = 1.5
 # Libertadores, o 5º à fase prévia, do 6º ao 11º à Sul-Americana e o Z4 cai.
 # A CBF passa a vaga adiante quando o campeão da Copa do Brasil, da
 # Libertadores ou da Sul-Americana já está classificado pela tabela.
+ZONAS_ANO = "2026"
 ZONAS = (
     {"id": "titulo", "nome": "Título", "curto": "Título", "de": 1, "ate": 1},
     {"id": "libertadores", "nome": "Libertadores (fase de grupos)", "curto": "G4", "de": 1, "ate": 4},

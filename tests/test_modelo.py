@@ -142,6 +142,8 @@ class TesteModelo(unittest.TestCase):
         self.assertGreater(modelo.covariancia[posicao, posicao], 0.01)
         with self.assertRaises(ValueError):
             ajustar(jogos, l2=0.0, times_extras={"Novo"})
+        # Sem regularização, só pode entrar como extra quem tem jogo na base.
+        self.assertIn("P", ajustar(jogos, l2=0.0, times_extras={"P"}).ataque)
 
     def test_promovido_comeca_abaixo_da_media(self):
         jogos = []

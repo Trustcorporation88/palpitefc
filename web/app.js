@@ -141,7 +141,7 @@ function heroRodada(resumo) {
     "hero",
     `<p class="olho">Atualizado até ${quando(inicio.atualizadoEm)}</p>
     <h2>A chance do jogo, não uma aposta</h2>
-    <p>Em ${resumo.jogos} jogos de 2026, calculados antes do apito, a leitura mais provável acertou ${pct(resumo.taxaMaisProvavel)} e o favorito da odd acertou ${pct(resumo.taxaFavorito)}. Na nota RPS, em que menor é melhor, a odd sem margem ficou em ${decimal(notas.mercado?.rps)} e o modelo em ${decimal(notas.modelo?.rps)}. Chutar pela média dá ${decimal(notas.base?.rps)}.</p>
+    <p>Em ${resumo.jogos} jogos de ${esc(inicio.temporada)}, calculados antes do apito, a leitura mais provável acertou ${pct(resumo.taxaMaisProvavel)} e o favorito da odd acertou ${pct(resumo.taxaFavorito)}. Na nota RPS, em que menor é melhor, a odd sem margem ficou em ${decimal(notas.mercado?.rps)} e o modelo em ${decimal(notas.modelo?.rps)}. Chutar pela média dá ${decimal(notas.base?.rps)}.</p>
     <div class="numeros">
       <div class="numero"><b>${pct(resumo.taxaMaisProvavel)}</b><span>acerto da leitura</span></div>
       <div class="numero"><b>${pct(resumo.taxaFavorito)}</b><span>acerto do favorito da odd</span></div>
@@ -159,7 +159,7 @@ async function paginaRodada() {
   if (inicio.proximos?.length) {
     const comOdd = inicio.proximos.some((jogo) => jogo.mercado);
     const odd = comOdd
-      ? "A barra azul é a chance da casa de aposta sem a margem. Quando o modelo e a odd discordam, a conferência de 2026 mostra que a odd costuma estar mais perto."
+      ? `A barra azul é a chance da casa de aposta sem a margem. Quando o modelo e a odd discordam, a conferência de ${esc(inicio.temporada)} mostra que a odd costuma estar mais perto.`
       : "A chance da casa de aposta aparece quando o football-data publica as odds, às terças e sextas.";
     pedacos.push(
       bloco("h2", "", inicio.proximaRodada ? `Próxima rodada · ${esc(inicio.proximaRodada)}ª` : "Próximos jogos"),
@@ -318,7 +318,7 @@ async function paginaTabela() {
       "section",
       "painel",
       `<h2>Chance no fim do campeonato</h2>
-      <p class="nota">Os ${dados.jogosRestantes} jogos que faltam foram sorteados ${dados.simulacoes.toLocaleString("pt-BR")} vezes com a mesma tabela de placares do modelo. ${dados.variantes > 1 ? `A força de cada time não é conhecida com exatidão, então cada bloco de ${Math.round(dados.simulacoes / dados.variantes)} temporadas usa uma de ${dados.variantes} versões do modelo sorteadas dentro dessa incerteza. ` : ""}A faixa de pontos vale para 90% das simulações. As vagas seguem a regra de 2026 pela posição; a CBF passa a vaga adiante quando um campeão de copa já está classificado.</p>
+      <p class="nota">Os ${dados.jogosRestantes} jogos que faltam foram sorteados ${dados.simulacoes.toLocaleString("pt-BR")} vezes com a mesma tabela de placares do modelo. ${dados.variantes > 1 ? `A força de cada time não é conhecida com exatidão, então cada bloco de ${Math.round(dados.simulacoes / dados.variantes)} temporadas usa uma de ${dados.variantes} versões do modelo sorteadas dentro dessa incerteza. ` : ""}A faixa de pontos vale para 90% das simulações. As vagas seguem a regra de ${esc(dados.regraDasVagas)} pela posição; a CBF passa a vaga adiante quando um campeão de copa já está classificado.</p>
       <div class="rolagem"><table class="tabela chances"><thead><tr><th>Time</th><th>Pts no fim</th>${zonas
         .map((zona) => `<th title="${esc(zona.nome)} (${faixa(zona)})">${esc(zona.curto)}</th>`)
         .join("")}</tr></thead><tbody>${chances}</tbody></table></div>`,

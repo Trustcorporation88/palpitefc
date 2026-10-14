@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from palpitefc.dados import PASTA, carregar, para_ajuste, promovidos, temporada_atual
+from palpitefc.dados import FUSO_DO_SITE, PASTA, carregar, para_ajuste, promovidos, temporada_em_exibicao
 from palpitefc.metricas import MERCADOS, calibracao, media_das_notas, notas
 from palpitefc.model import L2_PADRAO, PROMOVIDO_PADRAO, XI_DECAIMENTO, ajustar
 from palpitefc.palpite import avaliar
@@ -239,7 +239,7 @@ def resumir(avaliacoes: list[dict]) -> dict:
 
 def construir(temporada: str | None = None, anterior: dict | None = None) -> dict:
     jogos = carregar()
-    temporada = temporada or temporada_atual(jogos)
+    temporada = temporada or temporada_em_exibicao(jogos)[0]
     historico, por_jogo = impressoes(jogos, temporada)
     config = {**configuracao(), "historico": historico}
     prontos = {}
@@ -249,7 +249,8 @@ def construir(temporada: str | None = None, anterior: dict | None = None) -> dic
             _chave(item): item for item in anterior.get("jogos", []) if corte is None or item["quando"] < corte
         }
     avaliacoes = prever_temporada(jogos, temporada, prontos=prontos)
-    gerado = datetime.now().isoformat(timespec="seconds")
+    # Hora de Brasília: no GitHub Actions, o relógio da máquina está em UTC.
+    gerado = datetime.now(FUSO_DO_SITE).replace(tzinfo=None).isoformat(timespec="seconds")
     if prontos and anterior.get("jogos") == avaliacoes:
         # Nada mudou: o arquivo sai idêntico e não gera commit nem deploy.
         gerado = anterior.get("geradoEm", gerado)

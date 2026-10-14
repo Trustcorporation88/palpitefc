@@ -1,6 +1,8 @@
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -68,11 +70,23 @@ class TesteAgenda(unittest.TestCase):
 class TestePainelDeVerdade(unittest.TestCase):
     def test_time_fantasma_do_calendario_nao_entra_na_tabela(self):
         fantasma = {("Fantasma FC", "Palmeiras"): jogo_do_calendario("Fantasma FC", "Palmeiras", 31, "2026-10-17")}
-        with mock.patch.object(servico, "carregar_calendario", return_value=(fantasma, "openfootball")):
+        with mock.patch("palpitefc.dados.carregar_calendario", return_value=(fantasma, "openfootball")), \
+             redirect_stdout(io.StringIO()):
             painel = servico.Painel()
         self.assertEqual(len(painel.times_temporada), 20)
         self.assertNotIn("Fantasma FC", painel.times_temporada)
         self.assertEqual((painel.calendario, painel.fonte_calendario), ({}, None))
+
+
+class TesteHoraConfirmada(unittest.TestCase):
+    def test_calendario_decide_a_madrugada_inglesa(self):
+        painel = painel_de_teste([jogo_do_calendario("Santos", "Bahia", 32, "2026-10-24", "22:00")], [("Santos", "Bahia")])
+        # O football-data publicaria 25/10 01:00, lido como 21:00 de Brasília.
+        self.assertEqual(painel.hora_confirmada("Santos", "Bahia", "2026-10-24T21:00"), "2026-10-24T22:00")
+
+    def test_fora_da_madrugada_vale_o_football_data(self):
+        painel = painel_de_teste([jogo_do_calendario("Santos", "Bahia", 32, "2026-10-18", "17:00")], [("Santos", "Bahia")])
+        self.assertEqual(painel.hora_confirmada("Santos", "Bahia", "2026-10-18T16:00"), "2026-10-18T16:00")
 
 
 class TesteCalendarioSeguro(unittest.TestCase):

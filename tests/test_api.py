@@ -33,7 +33,9 @@ class TesteApi(unittest.TestCase):
         self.assertRegex(dados["competicao"], r"^Brasileirão Série A \d{4}$")
         self.assertIn(dados["fonteCalendario"], (None, "openfootball", "football-data.org"))
         notas = dados["resumo"]["notas"]
-        self.assertLess(notas["modelo"]["rps"], notas["base"]["rps"])
+        # No começo da temporada, com poucos jogos, a média da liga pode ganhar por sorte.
+        if dados["resumo"]["jogos"] >= 100:
+            self.assertLess(notas["modelo"]["rps"], notas["base"]["rps"])
         self.assertNotIn("calibracao", dados["resumo"])
         self.assertTrue(dados["rodada"])
 
@@ -62,8 +64,14 @@ class TesteApi(unittest.TestCase):
             self.assertTrue(jogo.get("quando") or jogo["agenda"])
         time = self.cliente.get("/api/times").json()["times"][0]["id"]
         jogos = self.cliente.get(f"/api/time/{time}").json()["jogos"]
-        datas = [jogo["agenda"]["data"] for jogo in jogos if jogo["agenda"]]
-        self.assertEqual(datas, sorted(datas))
+        momentos = [(jogo["agenda"]["data"], jogo["agenda"]["hora"] or "99:99") for jogo in jogos if jogo["agenda"]]
+        self.assertEqual(momentos, sorted(momentos))
+        na_rodada = [
+            jogo.get("quando") or f'{jogo["agenda"]["data"]}T{jogo["agenda"]["hora"] or "99:99"}'
+            for jogo in dados["proximos"]
+            if not jogo["agenda"] or not jogo["agenda"]["atrasado"]
+        ]
+        self.assertEqual(na_rodada, sorted(na_rodada))
 
     def test_conta(self):
         dados = self.cliente.get("/api/conta").json()

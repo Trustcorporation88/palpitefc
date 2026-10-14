@@ -6,6 +6,7 @@ import csv
 import json
 import re
 import unicodedata
+from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -15,6 +16,7 @@ from zoneinfo import ZoneInfo
 FUSO_DA_FONTE = ZoneInfo("Europe/London")
 FUSO_DO_SITE = ZoneInfo("America/Sao_Paulo")
 RODADAS = 38
+TIMES_NA_SERIE_A = 20
 _DATA = re.compile(r"\d{4}-\d{2}-\d{2}")
 _HORA = re.compile(r"\d{2}:\d{2}")
 PASTA = Path(__file__).resolve().parent.parent / "data"
@@ -105,6 +107,22 @@ def hora_de_brasilia(data: str, hora: str) -> datetime:
     return inglesa.astimezone(FUSO_DO_SITE).replace(tzinfo=None)
 
 
+def outra_leitura_da_madrugada_inglesa(quando: datetime) -> datetime | None:
+    """A outra hora de Brasília possível, quando a hora inglesa foi ambígua.
+
+    Na madrugada em que o Reino Unido atrasa o relógio, 01:00 a 01:59
+    acontece duas vezes. `hora_de_brasilia` fica com a primeira (o jogo das
+    21h de Brasília); esta função devolve a segunda (o das 22h), para o
+    calendário, que já vem na hora local, decidir. Fora dessa hora: None.
+    """
+    inglesa = quando.replace(tzinfo=FUSO_DO_SITE).astimezone(FUSO_DA_FONTE).replace(tzinfo=None)
+    primeira = inglesa.replace(tzinfo=FUSO_DA_FONTE, fold=0)
+    segunda = inglesa.replace(tzinfo=FUSO_DA_FONTE, fold=1)
+    if primeira.utcoffset() == segunda.utcoffset():
+        return None
+    return segunda.astimezone(FUSO_DO_SITE).replace(tzinfo=None)
+
+
 def carregar(caminho: Path = ARQUIVO) -> list[dict]:
     jogos: list[dict] = []
     with caminho.open(newline="", encoding="utf-8-sig") as arquivo:
@@ -155,19 +173,45 @@ def carregar_proximos(caminho: Path = ARQUIVO_PROXIMOS) -> list[dict]:
     return jogos
 
 
-def temporada_atual(jogos: list[dict]) -> str:
-    """A temporada mais recente do arquivo. Na virada do ano, o site muda sozinho."""
-    return max(jogo["temporada"] for jogo in jogos)
+def times_da_temporada(jogos: list[dict], temporada: str) -> set[str]:
+    return {lado for jogo in jogos if jogo["temporada"] == temporada for lado in (jogo["casa"], jogo["fora"])}
 
 
-def promovidos(jogos: list[dict], temporada: str) -> frozenset[str]:
+def temporada_atual(jogos: list[dict], times_do_calendario=frozenset()) -> str:
+    """A temporada mais recente com os 20 times conhecidos.
+
+    Em janeiro, o arquivo traz os primeiros jogos da temporada nova antes de
+    todo mundo ter jogado. O site só muda de ano quando os 20 times aparecem,
+    no arquivo ou no calendário daquela temporada; até lá, fica na anterior.
+    """
+    ordem = sorted({jogo["temporada"] for jogo in jogos})
+    ultima = ordem[-1]
+    conhecidos = times_da_temporada(jogos, ultima) | set(times_do_calendario)
+    if len(conhecidos) >= TIMES_NA_SERIE_A or len(ordem) == 1:
+        return ultima
+    return ordem[-2]
+
+
+def temporada_em_exibicao(jogos: list[dict], caminho: Path | None = None) -> tuple[str, dict[tuple[str, str], dict], str | None]:
+    """A temporada que o site mostra, com o calendário dela e a fonte."""
+    caminho = caminho or ARQUIVO_CALENDARIO
+    ultima = max(jogo["temporada"] for jogo in jogos)
+    calendario, fonte = carregar_calendario(ultima, caminho)
+    temporada = temporada_atual(jogos, {lado for par in calendario for lado in par})
+    if temporada != ultima:
+        calendario, fonte = carregar_calendario(temporada, caminho)
+    return temporada, calendario, fonte
+
+
+def promovidos(jogos: list[dict], temporada: str, participantes=None) -> frozenset[str]:
     """Times da temporada que não estavam na Série A do ano anterior.
 
     A lista de participantes é pública antes do primeiro jogo, então usá-la
-    não vaza resultado nenhum.
+    não vaza resultado nenhum. `participantes` serve para quem só aparece no
+    calendário, antes de jogar a primeira vez.
     """
     anterior = str(int(temporada) - 1)
-    da_temporada = {lado for jogo in jogos if jogo["temporada"] == temporada for lado in (jogo["casa"], jogo["fora"])}
+    da_temporada = set(participantes) if participantes is not None else times_da_temporada(jogos, temporada)
     do_ano_anterior = {lado for jogo in jogos if jogo["temporada"] == anterior for lado in (jogo["casa"], jogo["fora"])}
     if not do_ano_anterior:
         return frozenset()
@@ -258,19 +302,28 @@ def _normalizado(texto: str) -> str:
 
 
 def _time_do_football_data_org(time: dict) -> str:
+    """Nome exato primeiro; o nome curto só vale se apontar para um time só."""
+    if not isinstance(time, dict):
+        raise ValueError("Time sem dados no football-data.org")
     nome = str(time.get("name") or "")
     if nome in NOMES_OPENFOOTBALL:
         return NOMES_OPENFOOTBALL[nome]
     procurados = {_normalizado(str(time.get(campo) or "")) for campo in ("name", "shortName")} - {""}
-    for identificador, publico in NOMES.items():
-        if procurados & {_normalizado(identificador), _normalizado(publico)}:
-            return identificador
-    raise ValueError(f"Time sem tradução no football-data.org: {nome!r}")
+    achados = [
+        identificador
+        for identificador, publico in NOMES.items()
+        if procurados & {_normalizado(identificador), _normalizado(publico)}
+    ]
+    if len(achados) != 1:
+        raise ValueError(f"Time sem tradução única no football-data.org: {nome!r}")
+    print(f"Tradução pelo nome curto: {nome!r} -> {achados[0]}")
+    return achados[0]
 
 
 def converter_football_data_org(bruto: dict) -> list[dict]:
     """Do formato da API v4 do football-data.org para o calendário do site."""
     jogos = []
+    origem: dict[str, set[str]] = defaultdict(set)
     for jogo in bruto["matches"]:
         status = jogo.get("status")
         utc = datetime.fromisoformat(str(jogo["utcDate"]).replace("Z", "+00:00"))
@@ -292,6 +345,13 @@ def converter_football_data_org(bruto: dict) -> list[dict]:
                 }
             )
         )
+        origem[jogos[-1]["casa"]].add(str(jogo["homeTeam"].get("name")))
+        origem[jogos[-1]["fora"]].add(str(jogo["awayTeam"].get("name")))
+    # Dois clubes diferentes no mesmo nome do site (o Botafogo de Ribeirão e o
+    # do Rio, por exemplo) derrubam a conversão em vez de se misturarem.
+    misturados = {time: nomes for time, nomes in origem.items() if len(nomes) > 1}
+    if misturados:
+        raise ValueError(f"Clubes diferentes com o mesmo nome no site: {misturados}")
     return jogos
 
 

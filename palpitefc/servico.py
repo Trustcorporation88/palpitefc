@@ -8,20 +8,21 @@ from datetime import date, datetime, timedelta
 
 from palpitefc.conferir_tabela import ARQUIVO as CONFERENCIA_TABELA
 from palpitefc.dados import (
+    TIMES_NA_SERIE_A,
     carregar,
-    carregar_calendario,
     carregar_proximos,
     nome_publico,
+    outra_leitura_da_madrugada_inglesa,
     para_ajuste,
     promovidos,
-    temporada_atual,
+    temporada_em_exibicao,
 )
 from palpitefc.metricas import media_das_notas
 from palpitefc.model import L2_PADRAO, PROMOVIDO_PADRAO, XI_DECAIMENTO, ajustar
 from palpitefc.palpite import avaliar
 from palpitefc.retrospectiva import ARQUIVO as RETRO_ARQUIVO
 from palpitefc.retrospectiva import JANELA
-from palpitefc.simulacao import classificacao, simular
+from palpitefc.simulacao import ZONAS_ANO, classificacao, simular
 
 INTERVALO_RODADA = timedelta(hours=36)
 # O openfootball dá a todos os jogos de uma rodada a data do primeiro dia.
@@ -29,13 +30,13 @@ INTERVALO_RODADA = timedelta(hours=36)
 # essa folga ficou para trás: foi adiado.
 FOLGA_ATRASO = timedelta(days=3)
 IMPACTOS_EXIBIDOS = 10
-TIMES_NA_SERIE_A = 20
 
 
 class Painel:
     def __init__(self) -> None:
         self.jogos = carregar()
-        self.temporada = temporada_atual(self.jogos)
+        # A temporada nova só entra quando os 20 times são conhecidos.
+        self.temporada, self.calendario, self.fonte_calendario = temporada_em_exibicao(self.jogos)
         self.retro = json.loads(RETRO_ARQUIVO.read_text(encoding="utf-8"))
         self.conferencia_tabela = (
             json.loads(CONFERENCIA_TABELA.read_text(encoding="utf-8")) if CONFERENCIA_TABELA.exists() else None
@@ -49,7 +50,6 @@ class Painel:
             if jogo["gols_casa"] is not None and agora - jogo["quando"] <= JANELA
         ]
         da_temporada = [jogo for jogo in self.jogos if jogo["temporada"] == self.temporada]
-        self.calendario, self.fonte_calendario = carregar_calendario(self.temporada)
         # Na primeira rodada, só o calendário conhece os 20 times.
         do_arquivo = {jogo["casa"] for jogo in da_temporada} | {jogo["fora"] for jogo in da_temporada}
         juntos = do_arquivo | {lado for par in self.calendario for lado in par}
@@ -62,7 +62,7 @@ class Painel:
             para_ajuste(historico, agora),
             XI_DECAIMENTO,
             L2_PADRAO,
-            promovidos(self.jogos, self.temporada),
+            promovidos(self.jogos, self.temporada, self.times_temporada),
             PROMOVIDO_PADRAO,
             com_incerteza=True,
             times_extras=frozenset(self.times_temporada),
@@ -85,6 +85,17 @@ class Painel:
         self.rodadas = _rodadas(self.retro["jogos"])
         self.proximos = self._proximos(feitos)
 
+    def hora_confirmada(self, casa: str, fora: str, quando: str) -> str:
+        """Na madrugada em que o Reino Unido atrasa o relógio, a hora inglesa
+        tem duas leituras. Se o calendário, que vem na hora local, confirma a
+        outra, vale a do calendário."""
+        agenda = self.calendario.get((casa, fora))
+        outra = outra_leitura_da_madrugada_inglesa(datetime.fromisoformat(quando))
+        if not agenda or not agenda["hora"] or outra is None:
+            return quando
+        do_calendario = f'{agenda["data"]}T{agenda["hora"]}'
+        return do_calendario if do_calendario == outra.isoformat(timespec="minutes") else quando
+
     def agenda(self, casa: str, fora: str) -> dict | None:
         """Rodada e data previstas pelo calendário, quando o jogo está nele."""
         jogo = self.calendario.get((casa, fora))
@@ -96,8 +107,9 @@ class Painel:
     def _ordem(self, par: tuple[str, str]) -> tuple:
         jogo = self.calendario.get(par)
         if not jogo:
-            return ("9999-99-99", 99, *par)
-        return (jogo["data"], jogo["rodada"], *par)
+            return ("9999-99-99", "99:99", 99, *par)
+        # Sem hora confirmada, o jogo vai para o fim do dia.
+        return (jogo["data"], jogo["hora"] or "99:99", jogo["rodada"], *par)
 
     def _qual_a_proxima_rodada(self) -> int | None:
         """A menor rodada com jogo pendente que não ficou para trás."""
@@ -128,7 +140,7 @@ class Painel:
                 continue
             odds = {"casa": jogo["odd_casa"], "empate": jogo["odd_empate"], "fora": jogo["odd_fora"]}
             cartao = self._cartao(*par, odds)
-            cartao["quando"] = jogo["quando"].isoformat(timespec="minutes")
+            cartao["quando"] = self.hora_confirmada(*par, jogo["quando"].isoformat(timespec="minutes"))
             cartao["resultado"] = None
             cartoes.append(cartao)
             listados.add(par)
@@ -146,7 +158,9 @@ class Painel:
         def ordem(cartao: dict) -> tuple:
             agenda = cartao["agenda"] or {}
             sem_data = not cartao.get("quando") and agenda.get("atrasado", False)
-            return (sem_data, cartao.get("quando") or agenda.get("data") or "9999", cartao["casa"])
+            # "2026-10-17T18:00": a hora do football-data e a do calendário se comparam igual.
+            do_calendario = f'{agenda.get("data") or "9999-99-99"}T{agenda.get("hora") or "99:99"}'
+            return (sem_data, cartao.get("quando") or do_calendario, cartao["casa"])
 
         cartoes.sort(key=ordem)
         return cartoes
@@ -161,7 +175,11 @@ class Painel:
             "fonte": "football-data.co.uk",
             "atualizadoEm": self.ultimo_jogo.isoformat(timespec="minutes"),
             "resumo": _sem_calibracao(self.retro["resumo"]),
-            "rodada": self.rodadas[-1] if self.rodadas else [],
+            "temporada": self.temporada,
+            "rodada": [
+                {**jogo, "quando": self.hora_confirmada(jogo["casa"], jogo["fora"], jogo["quando"])}
+                for jogo in (self.rodadas[-1] if self.rodadas else [])
+            ],
             "proximaRodada": self.proxima_rodada,
             "proximos": self.proximos,
             "restantes": len(self.restantes),
@@ -175,6 +193,7 @@ class Painel:
         return {
             "atualizadoEm": self.ultimo_jogo.isoformat(timespec="minutes"),
             "proximaRodada": self.proxima_rodada,
+            "regraDasVagas": ZONAS_ANO,
             **{chave: valor for chave, valor in self.simulacao.items() if chave != "impacto"},
             "impacto": impacto[:IMPACTOS_EXIBIDOS],
             "impactoProximaRodada": da_proxima,

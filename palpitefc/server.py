@@ -80,7 +80,7 @@ def do_time(time: str) -> dict:
     try:
         return painel().do_time(time)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Time fora do Brasileirão 2026") from None
+        raise HTTPException(status_code=404, detail="Time fora do campeonato desta temporada") from None
 
 
 @app.get("/api/simular")
