@@ -1,4 +1,7 @@
-const ACEITE = "palpitefc-termo-1.0";
+const SESSAO = "palpitefc-sessao";
+const SUPA_URL = document.querySelector('meta[name="palpitefc-supabase-url"]')?.content || "";
+const SUPA_CHAVE = document.querySelector('meta[name="palpitefc-supabase-chave"]')?.content || "";
+const TERMO_VERSAO = document.querySelector('meta[name="palpitefc-termo-versao"]')?.content || "";
 const ROTULOS = { casa: "Casa", empate: "Empate", fora: "Fora" };
 const PAGINAS = ["rodada", "tabela", "times", "simular", "conta"];
 const VERSAO = document.documentElement.dataset.versao || "";
@@ -13,6 +16,8 @@ let pedidoInicial = null;
 let timeEscolhido = null;
 let confronto = null;
 let relogioAoVivo = null;
+let sessao = lerSessao();
+let usuarioId = null;
 // Consulta já, sem esperar o relógio: chamada quando a aba volta a aparecer.
 let acordarAoVivo = null;
 // Sobe a cada página aberta: a resposta que chega atrasada não monta por cima da outra.
@@ -46,13 +51,20 @@ function dinheiro(valor) {
   return `${sinal}${valor.toFixed(1).replace(".", ",")} u`;
 }
 
+class ErroDeLogin extends Error {}
+
 function api(caminho) {
   if (!respostas.has(caminho)) {
     const separador = caminho.includes("?") ? "&" : "?";
-    const pedido = fetch(`${caminho}${separador}v=${encodeURIComponent(VERSAO)}`).then((resposta) => {
+    const pedido = (async () => {
+      const token = await tokenAtual();
+      const resposta = await fetch(`${caminho}${separador}v=${encodeURIComponent(VERSAO)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (resposta.status === 401) throw new ErroDeLogin();
       if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
       return resposta.json();
-    });
+    })();
     pedido.catch(() => respostas.delete(caminho));
     respostas.set(caminho, pedido);
   }
@@ -226,7 +238,8 @@ async function estadoAoVivo() {
   const controle = new AbortController();
   const limite = setTimeout(() => controle.abort(), 8000);
   try {
-    const resposta = await fetch("/api/aovivo", { cache: "no-store", signal: controle.signal });
+    const token = await tokenAtual();
+    const resposta = await fetch("/api/aovivo", { cache: "no-store", signal: controle.signal, headers: token ? { Authorization: `Bearer ${token}` } : {} });
     return resposta.ok ? await resposta.json() : null;
   } catch {
     return null;
@@ -912,6 +925,12 @@ async function abrir(nome) {
     if (vez !== geracao) return;
     await MONTAR[nome](vez);
   } catch (erro) {
+    if (erro instanceof ErroDeLogin) {
+      // A sessão venceu ou o termo mudou: a pessoa entra de novo.
+      mostrar("entrar");
+      avisar("#aviso-entrar", "Entre de novo para continuar.");
+      return;
+    }
     const aviso = bloco("div", "painel", `<p class="vazio">Não deu para carregar agora. Confira a conexão e tente de novo.</p><button type="button" class="botao">Tentar de novo</button>`);
     aviso.querySelector("button").addEventListener("click", () => abrir(nome));
     miolo.replaceChildren(aviso);
@@ -920,26 +939,144 @@ async function abrir(nome) {
   window.scrollTo({ top: 0 });
 }
 
-function liberar() {
-  termo.hidden = true;
-  site.hidden = false;
+function mostrar(qual) {
+  document.querySelector("#entrar").hidden = qual !== "entrar";
+  termo.hidden = qual !== "termo";
+  site.hidden = qual !== "site";
+  document.querySelector("#sair").hidden = qual !== "site";
 }
 
-function lerAceite() {
+function avisar(id, texto) {
+  document.querySelector(id).textContent = texto;
+}
+
+function lerSessao() {
   try {
-    return localStorage.getItem(ACEITE);
+    return JSON.parse(localStorage.getItem(SESSAO));
   } catch {
     return null;
   }
 }
 
-function gravarAceite() {
+function guardarSessao(dados) {
+  // Só o login da pessoa fica aqui; sem armazenamento, ela entra de novo.
   try {
-    localStorage.setItem(ACEITE, new Date().toISOString());
+    if (dados) localStorage.setItem(SESSAO, JSON.stringify(dados));
+    else localStorage.removeItem(SESSAO);
   } catch {
-    // Sem armazenamento, o termo volta na próxima visita.
+    // Sem armazenamento, o login vale só até fechar a página.
   }
 }
+
+function sessaoDe(dados) {
+  return { access_token: dados.access_token, refresh_token: dados.refresh_token, expires_at: Math.floor(Date.now() / 1000) + dados.expires_in };
+}
+
+async function pedirAoSupabase(caminho, corpo, token = null, extra = {}) {
+  const resposta = await fetch(`${SUPA_URL}${caminho}`, {
+    method: corpo ? "POST" : "GET",
+    headers: { apikey: SUPA_CHAVE, "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra },
+    body: corpo ? JSON.stringify(corpo) : undefined,
+  });
+  const dados = await resposta.json().catch(() => ({}));
+  return { ok: resposta.ok, status: resposta.status, dados };
+}
+
+async function renovarSessao() {
+  if (!sessao?.refresh_token) return false;
+  const resposta = await pedirAoSupabase("/auth/v1/token?grant_type=refresh_token", { refresh_token: sessao.refresh_token });
+  if (!resposta.ok || !resposta.dados.access_token) {
+    sessao = null;
+    guardarSessao(null);
+    return false;
+  }
+  sessao = sessaoDe(resposta.dados);
+  guardarSessao(sessao);
+  return true;
+}
+
+async function tokenAtual() {
+  if (!sessao) return null;
+  // Renova um minuto antes de vencer.
+  if (sessao.expires_at - 60 < Date.now() / 1000 && !(await renovarSessao())) return null;
+  return sessao.access_token;
+}
+
+async function aceiteDoTermo(token) {
+  const filtro = `user_id=eq.${usuarioId}&versao=eq.${TERMO_VERSAO}&select=versao`;
+  const resposta = await pedirAoSupabase(`/rest/v1/aceites_termo?${filtro}`, null, token);
+  if (!resposta.ok) throw new ErroDeLogin();
+  return resposta.dados.length > 0;
+}
+
+async function iniciar() {
+  if (!SUPA_URL || !SUPA_CHAVE) {
+    mostrar("entrar");
+    avisar("#aviso-entrar", "O login não está configurado neste servidor.");
+    return;
+  }
+  const token = await tokenAtual();
+  if (!token) {
+    mostrar("entrar");
+    return;
+  }
+  const resposta = await pedirAoSupabase("/auth/v1/user", null, token);
+  if (!resposta.ok) {
+    sessao = null;
+    guardarSessao(null);
+    mostrar("entrar");
+    return;
+  }
+  usuarioId = resposta.dados.id;
+  try {
+    const aceitou = await aceiteDoTermo(token);
+    mostrar(aceitou ? "site" : "termo");
+    if (aceitou) abrir(rotaAtual());
+  } catch {
+    mostrar("entrar");
+    avisar("#aviso-entrar", "Não deu para confirmar o aceite agora. Tente de novo.");
+  }
+}
+
+let modoCadastro = false;
+
+function alternarModo() {
+  modoCadastro = !modoCadastro;
+  document.querySelector("#titulo-entrar").textContent = modoCadastro ? "Criar conta" : "Entrar";
+  document.querySelector("#botao-entrar").textContent = modoCadastro ? "Criar conta" : "Entrar";
+  document.querySelector("#alternar-entrar").textContent = modoCadastro ? "Já tenho conta" : "Criar conta";
+  document.querySelector("#form-entrar input[name=senha]").autocomplete = modoCadastro ? "new-password" : "current-password";
+  avisar("#aviso-entrar", "");
+}
+
+document.querySelector("#alternar-entrar").addEventListener("click", alternarModo);
+
+document.querySelector("#form-entrar").addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  const email = evento.target.email.value.trim();
+  const senha = evento.target.senha.value;
+  avisar("#aviso-entrar", modoCadastro ? "Criando a conta..." : "Entrando...");
+  const resposta = modoCadastro
+    ? await pedirAoSupabase("/auth/v1/signup", { email, password: senha })
+    : await pedirAoSupabase("/auth/v1/token?grant_type=password", { email, password: senha });
+  if (resposta.status === 429) {
+    avisar("#aviso-entrar", "Muitas tentativas. Espere alguns minutos e tente de novo.");
+    return;
+  }
+  if (!resposta.ok) {
+    avisar("#aviso-entrar", modoCadastro ? "Não deu para criar a conta. Confira o e-mail e use uma senha de 8 caracteres ou mais." : "E-mail ou senha não batem.");
+    return;
+  }
+  if (!resposta.dados.access_token) {
+    // Com confirmação de e-mail ligada, o cadastro só entra depois do link.
+    avisar("#aviso-entrar", "Enviamos um link de confirmação para o seu e-mail. Confirme e depois entre aqui.");
+    return;
+  }
+  sessao = sessaoDe(resposta.dados);
+  guardarSessao(sessao);
+  evento.target.senha.value = "";
+  iniciar();
+});
 
 document.querySelectorAll("#form-termo input").forEach((caixa) => {
   caixa.addEventListener("change", () => {
@@ -948,11 +1085,34 @@ document.querySelectorAll("#form-termo input").forEach((caixa) => {
   });
 });
 
-document.querySelector("#form-termo").addEventListener("submit", (evento) => {
+document.querySelector("#form-termo").addEventListener("submit", async (evento) => {
   evento.preventDefault();
-  gravarAceite();
-  liberar();
+  const token = await tokenAtual();
+  const resposta = await pedirAoSupabase(
+    "/rest/v1/aceites_termo",
+    { user_id: usuarioId, versao: TERMO_VERSAO },
+    token,
+    { Prefer: "resolution=ignore-duplicates" },
+  );
+  if (!resposta.ok) {
+    avisar("#aviso-termo", "Não deu para registrar o aceite agora. Tente de novo.");
+    return;
+  }
+  mostrar("site");
   abrir(rotaAtual());
+});
+
+document.querySelector("#sair").addEventListener("click", async () => {
+  const token = await tokenAtual();
+  if (token) pedirAoSupabase("/auth/v1/logout", {}, token);
+  sessao = null;
+  guardarSessao(null);
+  usuarioId = null;
+  respostas.clear();
+  pedidoInicial = null;
+  inicio = null;
+  mostrar("entrar");
+  avisar("#aviso-entrar", "Você saiu da conta.");
 });
 
 document.querySelectorAll(".menu button").forEach((botao) => {
@@ -987,9 +1147,4 @@ function dadosProntos() {
   return pedidoInicial;
 }
 
-if (lerAceite()) {
-  liberar();
-  abrir(rotaAtual());
-} else {
-  termo.hidden = false;
-}
+iniciar();

@@ -15,8 +15,24 @@
     <meta property="og:locale" content="pt_BR" />
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/estilos.css?v={{versao}}" />
+    <meta name="palpitefc-supabase-url" content="{{supabase_url}}" />
+    <meta name="palpitefc-supabase-chave" content="{{supabase_chave}}" />
+    <meta name="palpitefc-termo-versao" content="{{termo_versao}}" />
   </head>
   <body>
+    <div id="entrar" class="termo" hidden>
+      <form class="termo-caixa" id="form-entrar">
+        <p class="olho">Conta do PalpiteFC</p>
+        <h1 id="titulo-entrar">Entrar</h1>
+        <p class="termo-lead">Use o e-mail e a senha da sua conta. O aceite dos termos fica registrado nela.</p>
+        <label>E-mail <input type="email" name="email" autocomplete="email" required /></label>
+        <label>Senha <input type="password" name="senha" autocomplete="current-password" minlength="8" required /></label>
+        <p class="nota" id="aviso-entrar" role="status"></p>
+        <button type="submit" class="botao" id="botao-entrar">Entrar</button>
+        <button type="button" class="botao" id="alternar-entrar">Criar conta</button>
+      </form>
+    </div>
+
     <div id="termo" class="termo" hidden>
       <form class="termo-caixa" id="form-termo">
         <p class="olho">Versão 1.0 · 9 de outubro de 2026</p>
@@ -48,6 +64,7 @@
         <label><input type="checkbox" /> Entendo que este site não recebe aposta nem dinheiro e não tem vínculo com nenhuma bet.</label>
         <label><input type="checkbox" /> Declaro ter mais de 18 anos. Se eu apostar, a decisão e o risco são só meus.</label>
         <button type="submit" id="aceitar" disabled>Li, estou ciente e concordo</button>
+        <p class="nota" id="aviso-termo" role="status"></p>
       </form>
     </div>
 
@@ -58,6 +75,7 @@
           <h1>PalpiteFC</h1>
         </div>
         <p class="selo">Sem aposta · sem garantia</p>
+        <button type="button" class="botao" id="sair" hidden>Sair</button>
       </header>
       <main id="miolo" aria-live="polite"></main>
       <footer class="aviso">

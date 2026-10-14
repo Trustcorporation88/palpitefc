@@ -1,19 +1,60 @@
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
+from palpitefc import contas
 from palpitefc.server import app
+
+AMBIENTE = {"SUPABASE_URL": "https://exemplo.supabase.co", "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_teste"}
 
 
 class TesteApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cliente = TestClient(app)
+        # Quem entra aqui já tem conta e aceitou o termo.
+        cls.patches = [mock.patch.dict("os.environ", AMBIENTE), mock.patch.object(contas, "pode_ver", return_value=True)]
+        for patch in cls.patches:
+            patch.start()
+        cls.cliente = TestClient(app, headers={"Authorization": "Bearer token-de-teste-1234567890"})
         cls.cliente.__enter__()
 
     @classmethod
     def tearDownClass(cls):
         cls.cliente.__exit__(None, None, None)
+        for patch in cls.patches:
+            patch.stop()
+
+    def test_api_pede_login(self):
+        sem_login = TestClient(app)
+        with sem_login:
+            for caminho in ("/api/inicio", "/api/tabela", "/api/aovivo"):
+                resposta = sem_login.get(caminho)
+                self.assertEqual(resposta.status_code, 401)
+                self.assertEqual(resposta.headers["cache-control"], "private, no-store")
+            # O aviso de saúde continua aberto e não traz nada da conta.
+            self.assertEqual(sem_login.get("/api/saude").status_code, 200)
+
+    def test_token_que_nao_vale_ou_sem_termo(self):
+        with mock.patch.object(contas, "pode_ver", return_value=False):
+            with TestClient(app, headers={"Authorization": "Bearer token-inventado-1234567890"}) as cliente:
+                self.assertEqual(cliente.get("/api/inicio").status_code, 401)
+
+    def test_sem_configuracao_nao_abre(self):
+        with mock.patch.dict("os.environ", {"SUPABASE_URL": ""}):
+            with TestClient(app) as cliente:
+                self.assertEqual(cliente.get("/api/inicio").status_code, 503)
+
+    def test_pagina_leva_a_configuracao_publica_do_login(self):
+        with mock.patch.dict("os.environ", AMBIENTE):
+            from palpitefc import server
+            server.pagina_inicial.cache_clear()
+            pagina = server.pagina_inicial()
+        self.assertIn('content="https://exemplo.supabase.co"', pagina)
+        self.assertIn('content="sb_publishable_teste"', pagina)
+        self.assertIn(f'content="{contas.VERSAO_DO_TERMO}"', pagina)
+        self.assertNotIn("service_role", pagina)
+        server.pagina_inicial.cache_clear()
 
     def test_pagina_traz_versao_nos_estaticos(self):
         resposta = self.cliente.get("/")
@@ -35,7 +76,7 @@ class TesteApi(unittest.TestCase):
     def test_ao_vivo_sem_token(self):
         resposta = self.cliente.get("/api/aovivo")
         self.assertEqual(resposta.status_code, 200)
-        self.assertEqual(resposta.headers["cache-control"], "no-store")
+        self.assertEqual(resposta.headers["cache-control"], "private, no-store")
         self.assertEqual(resposta.json()["jogos"], [])
 
     def test_inicio_traz_notas(self):
@@ -114,7 +155,8 @@ class TesteApi(unittest.TestCase):
 
     def test_cabecalhos(self):
         resposta = self.cliente.get("/api/forca")
-        self.assertEqual(resposta.headers["cache-control"], "public, max-age=300")
+        # Por usuário: o navegador não guarda a resposta de quem saiu.
+        self.assertEqual(resposta.headers["cache-control"], "private, no-store")
         self.assertEqual(resposta.headers["x-content-type-options"], "nosniff")
 
     def test_versao_errada_nao_fica_em_cache(self):

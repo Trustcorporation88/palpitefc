@@ -2,16 +2,19 @@
 
 import asyncio
 import hashlib
+import html
+import os
 from contextlib import asynccontextmanager
 from functools import cache
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from palpitefc.aovivo import DESLIGADO, AoVivo, ler_token, times_sem_id
+from palpitefc import contas
 from palpitefc.conferir_tabela import ARQUIVO as ARQUIVO_CONFERENCIA
 from palpitefc.dados import ARQUIVO, ARQUIVO_CALENDARIO, ARQUIVO_PROXIMOS
 from palpitefc.retrospectiva import ARQUIVO as ARQUIVO_RETRO
@@ -47,9 +50,35 @@ app = FastAPI(title="PalpiteFC", lifespan=ciclo)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
+SEM_CACHE = {"Cache-Control": "private, no-store"}
+# Só o aviso de saúde fica aberto: todo o resto da API é de quem entrou e aceitou o termo.
+ABERTAS = {"/api/saude"}
+
+
+async def _barrar(request) -> JSONResponse | None:
+    if not contas.configurado():
+        return JSONResponse({"erro": "login não configurado no servidor"}, status_code=503, headers=SEM_CACHE)
+    cabecalho = request.headers.get("authorization", "")
+    token = cabecalho[7:].strip() if cabecalho.lower().startswith("bearer ") else ""
+    try:
+        liberado = bool(token) and await asyncio.to_thread(contas.pode_ver, token)
+    except contas.ContaIndisponivel:
+        return JSONResponse({"erro": "login indisponível agora"}, status_code=503, headers=SEM_CACHE)
+    if not liberado:
+        return JSONResponse({"erro": "entre e aceite os termos"}, status_code=401, headers=SEM_CACHE)
+    return None
+
+
 @app.middleware("http")
 async def cabecalhos(request, chamar):
+    protegida = request.url.path.startswith("/api/") and request.url.path not in ABERTAS
+    if protegida:
+        barrada = await _barrar(request)
+        if barrada is not None:
+            return barrada
     resposta = await chamar(request)
+    if protegida:
+        resposta.headers["Cache-Control"] = "private, no-store"
     pedida = request.query_params.get("v")
     if pedida is not None and pedida != versao():
         # Na troca de deploy, o pedido da versão nova pode cair no contêiner
@@ -151,7 +180,17 @@ def versao() -> str:
 
 @cache
 def pagina_inicial() -> str:
-    return (WEB / "index.html").read_text(encoding="utf-8").replace("{{versao}}", versao())
+    # A chave pública do Supabase vai para o navegador de qualquer forma; a secreta nunca sai do servidor.
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    chave = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip()
+    return (
+        (WEB / "index.html")
+        .read_text(encoding="utf-8")
+        .replace("{{versao}}", versao())
+        .replace("{{supabase_url}}", html.escape(url))
+        .replace("{{supabase_chave}}", html.escape(chave))
+        .replace("{{termo_versao}}", html.escape(contas.VERSAO_DO_TERMO))
+    )
 
 
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
