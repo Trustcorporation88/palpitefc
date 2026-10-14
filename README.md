@@ -82,12 +82,31 @@ O comando baixa os três arquivos, confere se o de resultados não perdeu jogos 
 
 O workflow `Atualizar dados` roda a atualização todo dia às 07h15 e às 17h30 de Brasília e faz commit só quando há dado novo. A rodada da tarde pega no mesmo dia a lista de próximos jogos que o football-data publica às terças e sextas. O deploy do Railway parte desse commit.
 
+## Placar ao vivo
+
+Com a variável `BSD_TOKEN` no Railway (chave gratuita da [Bzzoiro Sports Data](https://sports.bzzoiro.com/pricing/)), o servidor consulta os jogos em andamento da Série A. Sem o token, nada disso roda e o site fica como antes.
+
+- A cada 20 segundos na janela de cada jogo (de 10 minutos antes do início até 2h30 depois) e enquanto a fonte mostrar um jogo em andamento, mesmo depois da janela (início atrasado, paralisação), com teto de 4 horas.
+- A cada 2 minutos no dia de jogo sem hora confirmada (e nos 3 dias seguintes, porque o openfootball põe a rodada inteira no primeiro dia), e a cada 10 minutos no resto do dia, das 11h à meia-noite, para achar jogo remarcado. De madrugada, nada. Com o calendário que falta de 2026, o dia mais cheio dá cerca de 1.400 consultas, longe da cota grátis de 7.500.
+- Ao ligar, uma consulta busca os jogos encerrados dos últimos 4 dias: o placar visto ao vivo fica só na memória, e cada deploy o apagaria antes de o arquivo de resultados trazê-lo.
+
+Na página:
+
+- A Rodada mostra placar, minuto e situação de cada jogo, e se atualiza sozinha (a cada 30 segundos perto de jogo, a cada 90 no resto do tempo). O jogo que começou sai da lista de próximos jogos.
+- Sem notícia da fonte por 3 minutos, o jogo deixa de aparecer como "ao vivo" e passa a "sem atualização desde HH:MM".
+- A cada gol, a tabela do fim do campeonato é refeita como se os jogos em andamento terminassem assim ("Se terminar assim"), com o resto do campeonato simulado de novo.
+- O jogo em andamento não ganha chance de vitória: é o número usado para apostar ao vivo, e o site não mostra.
+- O leitor de tela ouve só as frases curtas ("Gol: …", "Fim de jogo: …"), não o bloco inteiro a cada atualização.
+
+`/api/saude` informa se o ao vivo está ativo, a última consulta, o último erro e os times sem id da Bzzoiro, sem o token. A licença da Bzzoiro permite mostrar os dados no próprio site, não repassá-los como feed: `/api/aovivo` existe só para as páginas do PalpiteFC.
+
 ## Virada de temporada
 
 A temporada do site é a mais recente do `BRA.csv`: quando o primeiro jogo de 2027 entrar, o site muda sozinho, e o calendário passa a ser baixado para 2027. Time sem histórico na base entra com o centro do promovido. O que precisa de gente, em janeiro:
 
 - conferir as vagas da CBF para o ano novo em `ZONAS` (`palpitefc/simulacao.py`);
 - incluir os times novos em `NOMES` e `NOMES_OPENFOOTBALL` (`palpitefc/dados.py`); sem isso, o calendário é ignorado e o nome aparece como no CSV;
+- incluir os ids da Bzzoiro dos times novos em `IDS_BZZOIRO` (`palpitefc/dados.py`); sem isso, o jogo deles não aparece ao vivo. `/api/saude` lista em `aoVivo.timesSemId` os que faltam;
 - revisar o texto do termo de uso em `web/index.html`, que cita a temporada 2026.
 
 ## Deploy

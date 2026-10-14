@@ -1,5 +1,6 @@
 """Site do PalpiteFC. A conta roda aqui; o navegador só mostra."""
 
+import asyncio
 import hashlib
 from contextlib import asynccontextmanager
 from functools import cache
@@ -10,6 +11,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from palpitefc.aovivo import DESLIGADO, AoVivo, ler_token, times_sem_id
 from palpitefc.conferir_tabela import ARQUIVO as ARQUIVO_CONFERENCIA
 from palpitefc.dados import ARQUIVO, ARQUIVO_CALENDARIO, ARQUIVO_PROXIMOS
 from palpitefc.retrospectiva import ARQUIVO as ARQUIVO_RETRO
@@ -22,10 +24,23 @@ CACHE_API = "public, max-age=300"
 CACHE_ESTATICO = "public, max-age=86400"
 
 
+# Placar ao vivo: só existe com BSD_TOKEN no ambiente do servidor.
+ao_vivo: AoVivo | None = None
+
+
 @asynccontextmanager
 async def ciclo(_: FastAPI):
-    painel()
+    global ao_vivo
+    token = ler_token()
+    tarefa = None
+    if token:
+        ao_vivo = AoVivo(painel(), token)
+        tarefa = asyncio.create_task(ao_vivo.rodar())
+    else:
+        painel()
     yield
+    if tarefa:
+        tarefa.cancel()
 
 
 app = FastAPI(title="PalpiteFC", lifespan=ciclo)
@@ -52,7 +67,25 @@ async def cabecalhos(request, chamar):
 @app.get("/api/saude")
 def saude(response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
-    return {"ok": True, "atualizadoEm": painel().ultimo_jogo.isoformat(timespec="minutes")}
+    estado = ao_vivo.estado() if ao_vivo else DESLIGADO
+    return {
+        "ok": True,
+        "atualizadoEm": painel().ultimo_jogo.isoformat(timespec="minutes"),
+        "aoVivo": {chave: estado[chave] for chave in ("ativo", "consultando", "ultimaConsulta", "erro")}
+        | {
+            "jogos": len(estado["jogos"]),
+            # Na virada do ano: time novo sem id da Bzzoiro não aparece ao vivo.
+            "timesSemId": times_sem_id(painel().times_temporada),
+            "idsDesconhecidos": sorted(ao_vivo.desconhecidos) if ao_vivo else [],
+        },
+    }
+
+
+@app.get("/api/aovivo")
+def placar_ao_vivo(response: Response) -> dict:
+    # Muda a cada gol: sem cache.
+    response.headers["Cache-Control"] = "no-store"
+    return ao_vivo.estado() if ao_vivo else DESLIGADO
 
 
 @app.get("/api/inicio")

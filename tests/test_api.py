@@ -27,6 +27,16 @@ class TesteApi(unittest.TestCase):
         self.assertEqual(resposta.status_code, 200)
         self.assertTrue(resposta.json()["ok"])
         self.assertEqual(resposta.headers["cache-control"], "no-store")
+        ao_vivo = resposta.json()["aoVivo"]
+        self.assertEqual(set(ao_vivo), {"ativo", "consultando", "ultimaConsulta", "erro", "jogos", "timesSemId", "idsDesconhecidos"})
+        # Os 20 times de hoje têm id na Bzzoiro.
+        self.assertEqual(ao_vivo["timesSemId"], [])
+
+    def test_ao_vivo_sem_token(self):
+        resposta = self.cliente.get("/api/aovivo")
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta.headers["cache-control"], "no-store")
+        self.assertEqual(resposta.json()["jogos"], [])
 
     def test_inicio_traz_notas(self):
         dados = self.cliente.get("/api/inicio").json()

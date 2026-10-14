@@ -12,6 +12,11 @@ let times = [];
 let pedidoInicial = null;
 let timeEscolhido = null;
 let confronto = null;
+let relogioAoVivo = null;
+// Consulta já, sem esperar o relógio: chamada quando a aba volta a aparecer.
+let acordarAoVivo = null;
+// Sobe a cada página aberta: a resposta que chega atrasada não monta por cima da outra.
+let geracao = 0;
 
 function esc(texto) {
   return String(texto ?? "").replace(/[&<>"']/g, (letra) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[letra]);
@@ -216,22 +221,184 @@ const FONTES = {
   openfootball: "Data prevista pelo calendário do openfootball, que atrasa algumas semanas; a CBF ainda pode mudar.",
 };
 
+async function estadoAoVivo() {
+  // Fora do cache de propósito: muda a cada gol.
+  try {
+    const resposta = await fetch("/api/aovivo", { cache: "no-store" });
+    return resposta.ok ? await resposta.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+const EM_CAMPO = new Set(["ao vivo", "intervalo"]);
+
+function parDoJogo(jogo) {
+  return `${jogo.casa}|${jogo.fora}`;
+}
+
+function horaDe(iso) {
+  return iso ? iso.slice(11, 16) : "";
+}
+
+function rotuloAoVivo(jogo, hoje) {
+  if (jogo.situacao === "encerrado") {
+    const dia = jogo.quando?.slice(0, 10);
+    return dia && hoje && dia !== hoje ? `Encerrado · ${quando(jogo.quando).split(" · ")[0]}` : "Encerrado";
+  }
+  if (jogo.situacao === "sem atualização") return `Sem atualização desde ${horaDe(jogo.vistoEm)}`;
+  if (jogo.situacao === "intervalo") return "Intervalo";
+  return jogo.minuto != null ? `Ao vivo · ${esc(jogo.minuto)}'` : "Ao vivo";
+}
+
+function mudanca(antes, agora) {
+  return `${pct(antes)} → <b>${pct(agora)}</b>`;
+}
+
+function secaoSeTerminarAssim(dados, encerrados, parados) {
+  if (!dados) return "";
+  const zonas = [
+    ["titulo", "Título"],
+    ["libertadores", "G4"],
+    ["rebaixamento", "Z4"],
+  ];
+  const maior = (time) => Math.max(...zonas.map(([zona]) => Math.abs(time.zonas[zona] - time.zonasAntes[zona])));
+  const linhas = dados.times
+    .filter((time) => maior(time) >= 0.02 || time.posicao !== time.posicaoAntes)
+    .sort((a, b) => maior(b) - maior(a))
+    .slice(0, 10)
+    .map(
+      (time) =>
+        `<tr><td>${esc(time.nome)}</td><td>${esc(time.posicaoAntes)}º → <b>${esc(time.posicao)}º</b></td>${zonas
+          .map(([zona]) => `<td>${mudanca(time.zonasAntes[zona], time.zonas[zona])}</td>`)
+          .join("")}</tr>`,
+    )
+    .join("");
+  if (!linhas) return "";
+  const titulo = encerrados ? "Como fica a tabela com esses resultados" : "Se terminar assim";
+  const como = encerrados
+    ? "Os resultados acima ainda não estão no arquivo de resultados do site. Aqui eles já entram na classificação, e o resto do campeonato é simulado de novo."
+    : "Os jogos acima entram na classificação com o placar de agora, e o resto do campeonato é simulado de novo. O jogo em andamento não ganha chance de vitória: o site não mostra números de aposta ao vivo.";
+  const aviso = parados ? " Há jogo sem atualização da fonte: o placar dele pode não ser o de agora." : "";
+  return `<section class="painel"><h2>${titulo}</h2>
+    <p class="nota">${como}${aviso}</p>
+    <div class="rolagem"><table class="tabela mudancas"><thead><tr><th>Time</th><th>Posição</th><th>Título</th><th>G4</th><th>Z4</th></tr></thead><tbody>${linhas}</tbody></table></div></section>`;
+}
+
+function htmlAoVivo(estado) {
+  if (!estado?.jogos?.length) return "";
+  const encerrados = estado.jogos.every((jogo) => jogo.situacao === "encerrado");
+  const parados = estado.jogos.some((jogo) => jogo.situacao === "sem atualização");
+  const hoje = estado.agora?.slice(0, 10);
+  const cartoes = estado.jogos
+    .map((jogo) => {
+      const selo = jogo.situacao === "ao vivo" ? "pulsa" : jogo.situacao === "sem atualização" ? "parado" : "";
+      return `<article class="jogo ao-vivo"><header><span class="selo-vivo ${selo}">${rotuloAoVivo(jogo, hoje)}</span></header>
+        <div class="placar-vivo"><b>${esc(jogo.casaNome)}</b><strong>${esc(jogo.golsCasa)}–${esc(jogo.golsFora)}</strong><b>${esc(jogo.foraNome)}</b></div></article>`;
+    })
+    .join("");
+  const fonte = estado.ultimaConsulta
+    ? `<p class="nota">Placar da Bzzoiro Sports Data, consultado às ${horaDe(estado.ultimaConsulta)}.</p>`
+    : "";
+  return `<h2>${encerrados ? "Resultados recentes" : "Ao vivo"}</h2>${cartoes}${fonte}${secaoSeTerminarAssim(estado.seTerminarAssim, encerrados, parados)}`;
+}
+
+function novidadesAoVivo(antes, agora) {
+  // Frases curtas para o leitor de tela; o bloco ao vivo em si fica calado.
+  if (!antes) return "";
+  const anteriores = new Map((antes.jogos || []).map((jogo) => [parDoJogo(jogo), jogo]));
+  return (agora.jogos || [])
+    .map((jogo) => {
+      const velho = anteriores.get(parDoJogo(jogo));
+      const placar = `${jogo.casaNome} ${jogo.golsCasa}–${jogo.golsFora} ${jogo.foraNome}`;
+      if (!velho) return EM_CAMPO.has(jogo.situacao) ? `Começou: ${placar}.` : "";
+      if (velho.golsCasa !== jogo.golsCasa || velho.golsFora !== jogo.golsFora) return `Gol: ${placar}.`;
+      if (velho.situacao !== "encerrado" && jogo.situacao === "encerrado") return `Fim de jogo: ${placar}.`;
+      return "";
+    })
+    .filter(Boolean)
+    .join(" ");
+}
+
+function acompanharAoVivo(vivo, aviso, estado, vez) {
+  let html = null;
+  let anterior = null;
+  const mostrar = (atual) => {
+    const novo = htmlAoVivo(atual);
+    if (novo !== html) {
+      // Recriar a tabela levaria a rolagem lateral de volta ao começo no celular.
+      const rolagem = vivo.querySelector(".rolagem")?.scrollLeft || 0;
+      vivo.innerHTML = novo;
+      html = novo;
+      const tabela = vivo.querySelector(".rolagem");
+      if (tabela) tabela.scrollLeft = rolagem;
+    }
+    const frase = novidadesAoVivo(anterior, atual);
+    if (frase) aviso.textContent = frase;
+    anterior = atual;
+    // Jogo que já está no ao vivo não fica também com o cartão de antes do jogo.
+    const emCampo = new Set((atual?.jogos || []).map(parDoJogo));
+    const cartoes = [...miolo.querySelectorAll(".jogo[data-par]")];
+    cartoes.forEach((cartao) => {
+      cartao.hidden = emCampo.has(cartao.dataset.par);
+    });
+    const vazio = cartoes.every((cartao) => cartao.hidden);
+    miolo.querySelectorAll("[data-proximos]").forEach((elemento) => {
+      elemento.hidden = vazio;
+    });
+  };
+  const seguir = (atual) => {
+    if (!atual?.ativo) return;
+    // Mesmo longe do jogo a página volta a perguntar: quem abre antes do apito vê o jogo começar.
+    const ligeiro = atual.consultando || (atual.jogos || []).some((jogo) => EM_CAMPO.has(jogo.situacao));
+    const olhar = async () => {
+      clearTimeout(relogioAoVivo);
+      acordarAoVivo = null;
+      if (vez !== geracao) return;
+      // Aba escondida não consulta; ao voltar, acordarAoVivo consulta na hora.
+      const novo = document.hidden ? null : await estadoAoVivo();
+      if (vez !== geracao || !vivo.isConnected) return;
+      if (novo) mostrar(novo);
+      seguir(novo || atual);
+    };
+    acordarAoVivo = olhar;
+    relogioAoVivo = setTimeout(olhar, ligeiro ? 30000 : 90000);
+  };
+  mostrar(estado);
+  seguir(estado);
+}
+
 async function paginaRodada() {
-  const pedacos = [heroRodada(inicio.resumo)];
-  if (inicio.proximos?.length) {
-    const comOdd = inicio.proximos.some((jogo) => jogo.mercado);
+  const vez = geracao;
+  const estado = await estadoAoVivo();
+  // Outra página foi aberta enquanto a resposta não vinha.
+  if (vez !== geracao) return;
+  const vivo = bloco("div", "bloco-vivo", "");
+  vivo.setAttribute("aria-live", "off");
+  const aviso = bloco("p", "so-leitor", "");
+  aviso.setAttribute("role", "status");
+  const pedacos = [heroRodada(inicio.resumo), vivo, aviso];
+  const proximos = inicio.proximos || [];
+  if (proximos.length) {
+    const comOdd = proximos.some((jogo) => jogo.mercado);
     const odd = comOdd
       ? `A barra azul é a chance da casa de aposta sem a margem. Quando o modelo e a odd discordam, a conferência de ${esc(inicio.temporada)} mostra que a odd costuma estar mais perto.`
       : "A chance da casa de aposta aparece quando o football-data publica as odds, às terças e sextas.";
-    pedacos.push(
-      bloco("h2", "", inicio.proximaRodada ? `Próxima rodada · ${esc(inicio.proximaRodada)}ª` : "Próximos jogos"),
-      bloco("p", "nota", `${FONTES[inicio.fonteCalendario] || "Datas e horas do football-data.co.uk."} ${odd} Não é palpite de aposta.`),
-    );
-    inicio.proximos.forEach((jogo) => pedacos.push(cartao(jogo)));
+    const titulo = bloco("h2", "", inicio.proximaRodada ? `Próxima rodada · ${esc(inicio.proximaRodada)}ª` : "Próximos jogos");
+    const nota = bloco("p", "nota", `${FONTES[inicio.fonteCalendario] || "Datas e horas do football-data.co.uk."} ${odd} Não é palpite de aposta.`);
+    titulo.dataset.proximos = "";
+    nota.dataset.proximos = "";
+    pedacos.push(titulo, nota);
+    proximos.forEach((jogo) => {
+      const elemento = cartao(jogo);
+      elemento.dataset.par = parDoJogo(jogo);
+      pedacos.push(elemento);
+    });
   }
   pedacos.push(bloco("h2", "", "Última rodada"));
   inicio.rodada.forEach((jogo) => pedacos.push(cartao(jogo)));
   miolo.replaceChildren(...pedacos);
+  acompanharAoVivo(vivo, aviso, estado, vez);
 }
 
 function celulaChance(valor, tom) {
@@ -695,6 +862,10 @@ function rotaAtual() {
 }
 
 async function abrir(nome) {
+  geracao += 1;
+  clearTimeout(relogioAoVivo);
+  relogioAoVivo = null;
+  acordarAoVivo = null;
   document.querySelectorAll(".menu button").forEach((botao) => {
     const ativa = botao.dataset.pag === nome;
     botao.classList.toggle("ativa", ativa);
@@ -758,6 +929,10 @@ document.querySelectorAll(".menu button").forEach((botao) => {
 
 window.addEventListener("hashchange", () => {
   if (!site.hidden) abrir(rotaAtual());
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && acordarAoVivo) acordarAoVivo();
 });
 
 function dadosProntos() {

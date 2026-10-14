@@ -32,6 +32,8 @@ INTERVALO_RODADA = timedelta(hours=36)
 # essa folga ficou para trás: foi adiado.
 FOLGA_ATRASO = timedelta(days=3)
 IMPACTOS_EXIBIDOS = 10
+# Durante os jogos a tabela é refeita a cada gol: metade das simulações basta.
+SIMULACOES_AO_VIVO = 10_000
 
 
 class Painel:
@@ -215,6 +217,71 @@ class Painel:
             "restantes": len(self.restantes),
             "mando": self.modelo.mando,
             "rho": self.modelo.rho,
+        }
+
+    def inicios_pendentes(self) -> list[tuple[tuple[str, str], datetime, bool]]:
+        """Quando cada jogo pendente pode começar, e se a hora está confirmada.
+
+        A hora do football-data e a do calendário mudam em ritmos diferentes:
+        quando divergem, o par vem duas vezes e as duas janelas valem. Sem
+        hora, só o dia (meio-dia, com a hora não confirmada). Jogo que o
+        calendário dá como adiado não abre janela pela hora antiga, e jogo
+        atrasado sem data nova fica de fora.
+        """
+        inicios = set()
+        for cartao in self.proximos:
+            par = (cartao["casa"], cartao["fora"])
+            jogo = self.calendario.get(par)
+            if cartao.get("quando") and not (jogo and jogo["adiado"]):
+                inicios.add((par, datetime.fromisoformat(cartao["quando"]), True))
+        com_hora = {par for par, _, _ in inicios}
+        for par in self.restantes:
+            agenda = self.agenda(*par)
+            if not agenda or agenda["atrasado"]:
+                continue
+            if agenda["hora"]:
+                inicios.add((par, datetime.fromisoformat(f'{agenda["data"]}T{agenda["hora"]}'), True))
+            elif par not in com_hora:
+                inicios.add((par, datetime.fromisoformat(f'{agenda["data"]}T12:00'), False))
+        return sorted(inicios)
+
+    def se_terminar_assim(self, placares: dict[tuple[str, str], tuple[int, int]]) -> dict | None:
+        """A tabela do fim do campeonato se os jogos em andamento terminarem como estão.
+
+        Cada jogo ao vivo entra na classificação com o placar de agora, e só o
+        resto do campeonato é simulado. Não há chance de vitória do jogo em
+        andamento: é o número que se usa para apostar ao vivo.
+        """
+        pendentes = set(self.restantes)
+        validos = {par: placar for par, placar in placares.items() if par in pendentes}
+        if not validos:
+            return None
+        terminados = [
+            {"temporada": self.temporada, "casa": casa, "fora": fora, "gols_casa": gols_casa, "gols_fora": gols_fora}
+            for (casa, fora), (gols_casa, gols_fora) in validos.items()
+        ]
+        da_temporada = [jogo for jogo in self.jogos if jogo["temporada"] == self.temporada] + terminados
+        tabela = classificacao(da_temporada, self.times_temporada)
+        restantes = [par for par in self.restantes if par not in validos]
+        simulado = simular(self.modelo, tabela, restantes, simulacoes=SIMULACOES_AO_VIVO)
+        antes = {linha["id"]: linha for linha in self.simulacao["times"]}
+        return {
+            "jogos": len(validos),
+            "simulacoes": simulado["simulacoes"],
+            "zonas": simulado["zonas"],
+            "times": [
+                {
+                    "id": linha["id"],
+                    "nome": linha["nome"],
+                    "posicao": linha["posicao"],
+                    "pts": linha["pts"],
+                    "zonas": linha["zonas"],
+                    "posicaoAntes": antes[linha["id"]]["posicao"],
+                    "ptsAntes": antes[linha["id"]]["pts"],
+                    "zonasAntes": antes[linha["id"]]["zonas"],
+                }
+                for linha in simulado["times"]
+            ],
         }
 
     def tabela(self) -> dict:

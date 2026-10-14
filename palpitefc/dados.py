@@ -87,6 +87,32 @@ NOMES = {
 }
 
 
+# Id do time na Bzzoiro (placar ao vivo) -> nome no football-data. O id não
+# muda com o nome: "Athletico" e "Red Bull Bragantino" lá, ids aqui.
+IDS_BZZOIRO = {
+    150: "Cruzeiro",
+    151: "Mirassol",
+    153: "Fluminense",
+    154: "Gremio",
+    155: "Atletico-MG",
+    157: "Vitoria",
+    158: "Sao Paulo",
+    160: "Flamengo RJ",
+    161: "Internacional",
+    162: "Palmeiras",
+    163: "Botafogo RJ",
+    164: "Vasco",
+    165: "Santos",
+    166: "Bahia",
+    167: "Corinthians",
+    168: "Bragantino",
+    370: "Coritiba",
+    371: "Athletico-PR",
+    372: "Remo",
+    373: "Chapecoense-SC",
+}
+
+
 def nome_publico(time: str) -> str:
     return NOMES.get(time, time)
 
