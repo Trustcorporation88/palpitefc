@@ -53,10 +53,14 @@ h2 { font-size: 1.25rem; margin: 0 0 8px; }
 .selo, .aviso, .nota { color: var(--mudo); }
 
 .selo {
-  border: 1px solid var(--linha);
+  border: 1px solid var(--lima);
   border-radius: 999px;
   padding: 6px 10px;
   font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--lima);
+  background: var(--lima-escura);
+  white-space: nowrap;
 }
 
 main { padding-bottom: 108px; }
