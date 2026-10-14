@@ -136,7 +136,9 @@ class TesteJanela(unittest.TestCase):
         self.assertEqual(vivo.janela(INICIO - timedelta(hours=3)), ("sentinela", aovivo.INTERVALO_SENTINELA))
         # A olhada de 10 em 10 minutos não atravessa o começo da janela.
         self.assertEqual(vivo.janela(INICIO - timedelta(minutes=13)), ("sentinela", 180))
-        self.assertEqual(vivo.janela(INICIO + timedelta(hours=3))[0], "sentinela")
+        # Depois da janela, até 4h do início, segue a cada 2 minutos (jogo atrasado).
+        self.assertEqual(vivo.janela(INICIO + timedelta(hours=3)), ("dia", aovivo.INTERVALO_SEM_HORA))
+        self.assertEqual(vivo.janela(INICIO.replace(hour=12))[0], "sentinela")
 
     def test_madrugada_dorme_ate_as_onze(self):
         vivo = self.vivo([(PAR, INICIO, True)])
@@ -172,7 +174,7 @@ class TesteJanela(unittest.TestCase):
         self.assertEqual(vivo.estado()["jogos"][0]["golsFora"], 1)
         vivo.consultar()
         self.assertEqual(vivo.estado()["jogos"][0]["situacao"], "encerrado")
-        self.assertEqual(vivo.janela(agora[0])[0], "sentinela")
+        self.assertEqual(vivo.janela(agora[0])[0], "dia")
 
     def test_teto_de_quatro_horas(self):
         tarde = INICIO.replace(hour=14)
@@ -190,9 +192,50 @@ class TesteJanela(unittest.TestCase):
         painel = PainelFalso([(PAR, INICIO.replace(hour=16), True)])
         agora = INICIO.replace(hour=18, minute=40)
         vivo = AoVivo(painel, "t" * 32, baixar=lambda url: {"events": [evento(151, 161, 0, 0, periodo="1st_half", minuto=8)]}, relogio=lambda: agora)
-        self.assertEqual(vivo.janela(agora)[0], "sentinela")
+        self.assertEqual(vivo.janela(agora)[0], "dia")
         vivo.consultar()
         self.assertEqual(vivo.janela(agora), ("jogo", aovivo.INTERVALO_NO_JOGO))
+
+
+    def test_passa_da_meia_noite(self):
+        # Jogo das 21h30 atrasado: à 0h05 ainda se consulta, mesmo sem tê-lo visto (servidor reiniciado).
+        noite = INICIO.replace(hour=21, minute=30)
+        vivo = AoVivo(PainelFalso([(PAR, noite, True)]), "t" * 32, baixar=lambda url: {})
+        self.assertEqual(vivo.janela(noite + timedelta(minutes=155))[0], "dia")
+        self.assertIsNone(vivo.janela(noite + timedelta(hours=4, minutes=5))[0])
+
+    def test_uma_resposta_sem_o_jogo_nao_tira_do_ritmo(self):
+        tarde = INICIO.replace(hour=14)
+        respostas = iter([{"events": [evento(151, 161, 0, 0)]}, {"events": []}, {"events": []}, {"events": []}])
+        agora = [tarde + timedelta(hours=3)]
+        vivo = AoVivo(PainelFalso([(PAR, tarde, True)]), "t" * 32, baixar=lambda url: next(respostas), relogio=lambda: agora[0])
+        vivo.consultar()
+        agora[0] = tarde + timedelta(hours=3, minutes=1)
+        vivo.consultar()
+        self.assertEqual(vivo.janela(agora[0])[0], "jogo")
+        vivo.consultar()
+        vivo.consultar()
+        self.assertEqual(vivo.janela(agora[0])[0], "dia")
+
+    def test_recuperacao_tenta_de_novo(self):
+        tentativas = []
+
+        def baixar(url):
+            tentativas.append(url)
+            if len(tentativas) == 1:
+                raise ErroDaFonte("HTTP 503")
+            return {"results": []}
+
+        agora = [INICIO.replace(hour=3)]
+        vivo = AoVivo(PainelFalso([(PAR, INICIO, True)]), "t" * 32, baixar=baixar, relogio=lambda: agora[0])
+        vivo._recuperar_em = agora[0]
+        asyncio.run(vivo._talvez_recuperar(agora[0]))
+        self.assertEqual((len(tentativas), vivo.erro), (1, "HTTP 503"))
+        asyncio.run(vivo._talvez_recuperar(agora[0]))
+        self.assertEqual(len(tentativas), 1)
+        agora[0] += timedelta(minutes=2)
+        asyncio.run(vivo._talvez_recuperar(agora[0]))
+        self.assertEqual((len(tentativas), vivo._recuperar_em), (2, None))
 
 
 class TesteConsulta(unittest.TestCase):

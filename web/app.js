@@ -222,16 +222,22 @@ const FONTES = {
 };
 
 async function estadoAoVivo() {
-  // Fora do cache de propósito: muda a cada gol.
+  // Fora do cache de propósito: muda a cada gol. Pedido pendurado conta como falha.
+  const controle = new AbortController();
+  const limite = setTimeout(() => controle.abort(), 8000);
   try {
-    const resposta = await fetch("/api/aovivo", { cache: "no-store" });
+    const resposta = await fetch("/api/aovivo", { cache: "no-store", signal: controle.signal });
     return resposta.ok ? await resposta.json() : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(limite);
   }
 }
 
 const EM_CAMPO = new Set(["ao vivo", "intervalo"]);
+// Sem resposta do próprio site por este tempo, o placar da tela pode não ser o de agora.
+const SEM_NOTICIA_MS = 3 * 60 * 1000;
 
 function parDoJogo(jogo) {
   return `${jogo.casa}|${jogo.fora}`;
@@ -279,7 +285,7 @@ function secaoSeTerminarAssim(dados, encerrados, parados) {
   const como = encerrados
     ? "Os resultados acima ainda não estão no arquivo de resultados do site. Aqui eles já entram na classificação, e o resto do campeonato é simulado de novo."
     : "Os jogos acima entram na classificação com o placar de agora, e o resto do campeonato é simulado de novo. O jogo em andamento não ganha chance de vitória: o site não mostra números de aposta ao vivo.";
-  const aviso = parados ? " Há jogo sem atualização da fonte: o placar dele pode não ser o de agora." : "";
+  const aviso = parados ? " Há jogo sem atualização: o placar dele pode não ser o de agora." : "";
   return `<section class="painel"><h2>${titulo}</h2>
     <p class="nota">${como}${aviso}</p>
     <div class="rolagem"><table class="tabela mudancas"><thead><tr><th>Time</th><th>Posição</th><th>Título</th><th>G4</th><th>Z4</th></tr></thead><tbody>${linhas}</tbody></table></div></section>`;
@@ -303,6 +309,16 @@ function htmlAoVivo(estado) {
   return `<h2>${encerrados ? "Resultados recentes" : "Ao vivo"}</h2>${cartoes}${fonte}${secaoSeTerminarAssim(estado.seTerminarAssim, encerrados, parados)}`;
 }
 
+function semNoticia(estado) {
+  // O site parou de responder: nada de "ao vivo" pulsando com o placar velho.
+  return {
+    ...estado,
+    jogos: estado.jogos.map((jogo) =>
+      EM_CAMPO.has(jogo.situacao) ? { ...jogo, situacao: "sem atualização", minuto: null, vistoEm: jogo.vistoEm || estado.ultimaConsulta } : jogo,
+    ),
+  };
+}
+
 function novidadesAoVivo(antes, agora) {
   // Frases curtas para o leitor de tela; o bloco ao vivo em si fica calado.
   if (!antes) return "";
@@ -312,7 +328,10 @@ function novidadesAoVivo(antes, agora) {
       const velho = anteriores.get(parDoJogo(jogo));
       const placar = `${jogo.casaNome} ${jogo.golsCasa}–${jogo.golsFora} ${jogo.foraNome}`;
       if (!velho) return EM_CAMPO.has(jogo.situacao) ? `Começou: ${placar}.` : "";
-      if (velho.golsCasa !== jogo.golsCasa || velho.golsFora !== jogo.golsFora) return `Gol: ${placar}.`;
+      const antesGols = velho.golsCasa + velho.golsFora;
+      const agoraGols = jogo.golsCasa + jogo.golsFora;
+      if (agoraGols > antesGols) return `Gol: ${placar}.`;
+      if (agoraGols < antesGols || velho.golsCasa !== jogo.golsCasa) return `Placar corrigido: ${placar}.`;
       if (velho.situacao !== "encerrado" && jogo.situacao === "encerrado") return `Fim de jogo: ${placar}.`;
       return "";
     })
@@ -320,10 +339,11 @@ function novidadesAoVivo(antes, agora) {
     .join(" ");
 }
 
-function acompanharAoVivo(vivo, aviso, estado, vez) {
+function acompanharAoVivo(vivo, aviso, vez) {
   let html = null;
   let anterior = null;
-  const mostrar = (atual) => {
+  let ultimaBoa = 0;
+  const desenhar = (atual) => {
     const novo = htmlAoVivo(atual);
     if (novo !== html) {
       // Recriar a tabela levaria a rolagem lateral de volta ao começo no celular.
@@ -333,9 +353,6 @@ function acompanharAoVivo(vivo, aviso, estado, vez) {
       const tabela = vivo.querySelector(".rolagem");
       if (tabela) tabela.scrollLeft = rolagem;
     }
-    const frase = novidadesAoVivo(anterior, atual);
-    if (frase) aviso.textContent = frase;
-    anterior = atual;
     // Jogo que já está no ao vivo não fica também com o cartão de antes do jogo.
     const emCampo = new Set((atual?.jogos || []).map(parDoJogo));
     const cartoes = [...miolo.querySelectorAll(".jogo[data-par]")];
@@ -347,32 +364,47 @@ function acompanharAoVivo(vivo, aviso, estado, vez) {
       elemento.hidden = vazio;
     });
   };
-  const seguir = (atual) => {
-    if (!atual?.ativo) return;
+  const receber = (novo) => {
+    if (novo) {
+      // Servidor recém-ligado que ainda não consultou não desmente o que já se viu.
+      if (novo.ativo && !novo.ultimaConsulta && anterior?.ultimaConsulta) return;
+      const frase = novidadesAoVivo(anterior?.ultimaConsulta ? anterior : null, novo);
+      if (frase) aviso.textContent = frase;
+      anterior = novo;
+      ultimaBoa = Date.now();
+      desenhar(novo);
+    } else if (anterior?.jogos?.length && Date.now() - ultimaBoa > SEM_NOTICIA_MS) {
+      desenhar(semNoticia(anterior));
+    }
+  };
+  const seguir = () => {
+    // Só para quando o servidor diz que o ao vivo está desligado; falha de rede tenta de novo.
+    if (anterior && anterior.ativo === false) return;
     // Mesmo longe do jogo a página volta a perguntar: quem abre antes do apito vê o jogo começar.
-    const ligeiro = atual.consultando || (atual.jogos || []).some((jogo) => EM_CAMPO.has(jogo.situacao));
+    const ligeiro = anterior?.consultando || (anterior?.jogos || []).some((jogo) => EM_CAMPO.has(jogo.situacao));
     const olhar = async () => {
       clearTimeout(relogioAoVivo);
       acordarAoVivo = null;
       if (vez !== geracao) return;
       // Aba escondida não consulta; ao voltar, acordarAoVivo consulta na hora.
-      const novo = document.hidden ? null : await estadoAoVivo();
-      if (vez !== geracao || !vivo.isConnected) return;
-      if (novo) mostrar(novo);
-      seguir(novo || atual);
+      if (!document.hidden) {
+        const novo = await estadoAoVivo();
+        if (vez !== geracao || !vivo.isConnected) return;
+        receber(novo);
+      }
+      seguir();
     };
     acordarAoVivo = olhar;
     relogioAoVivo = setTimeout(olhar, ligeiro ? 30000 : 90000);
   };
-  mostrar(estado);
-  seguir(estado);
+  return async () => {
+    receber(await estadoAoVivo());
+    if (vez !== geracao || !vivo.isConnected) return;
+    seguir();
+  };
 }
 
-async function paginaRodada() {
-  const vez = geracao;
-  const estado = await estadoAoVivo();
-  // Outra página foi aberta enquanto a resposta não vinha.
-  if (vez !== geracao) return;
+async function paginaRodada(vez) {
   const vivo = bloco("div", "bloco-vivo", "");
   vivo.setAttribute("aria-live", "off");
   const aviso = bloco("p", "so-leitor", "");
@@ -397,8 +429,9 @@ async function paginaRodada() {
   }
   pedacos.push(bloco("h2", "", "Última rodada"));
   inicio.rodada.forEach((jogo) => pedacos.push(cartao(jogo)));
+  // A página aparece na hora; o bloco ao vivo chega quando /api/aovivo responder.
   miolo.replaceChildren(...pedacos);
-  acompanharAoVivo(vivo, aviso, estado, vez);
+  acompanharAoVivo(vivo, aviso, vez)();
 }
 
 function celulaChance(valor, tom) {
@@ -862,7 +895,7 @@ function rotaAtual() {
 }
 
 async function abrir(nome) {
-  geracao += 1;
+  const vez = ++geracao;
   clearTimeout(relogioAoVivo);
   relogioAoVivo = null;
   acordarAoVivo = null;
@@ -875,7 +908,9 @@ async function abrir(nome) {
   miolo.replaceChildren(bloco("p", "vazio", "Carregando..."));
   try {
     await dadosProntos();
-    await MONTAR[nome]();
+    // Outra página foi pedida enquanto os dados não vinham.
+    if (vez !== geracao) return;
+    await MONTAR[nome](vez);
   } catch (erro) {
     const aviso = bloco("div", "painel", `<p class="vazio">Não deu para carregar agora. Confira a conexão e tente de novo.</p><button type="button" class="botao">Tentar de novo</button>`);
     aviso.querySelector("button").addEventListener("click", () => abrir(nome));

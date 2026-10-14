@@ -47,6 +47,13 @@ DIAS_SEM_HORA = timedelta(days=3)
 TETO_EM_CAMPO = timedelta(hours=4)
 # Sem notícia da fonte por este tempo, o placar pode não ser o de agora.
 SEM_NOTICIA = timedelta(minutes=3)
+# Respostas seguidas sem o jogo antes de sair do ritmo de jogo: uma falha da lista não basta.
+FALTAS_PARA_SAIR = 3
+# Jogo que volta à lista depois disso (ou depois de adiado) é jogo novo: teto e minuto recomeçam.
+VOLTA_DEPOIS = timedelta(hours=1)
+# Jogo que some sem o apito final: os encerrados são consultados de novo depois disso.
+CONFERIR_SUMIDO = timedelta(minutes=15)
+ESPERA_DA_RECUPERACAO = 60
 DIAS_RECUPERADOS = 4
 ESPERA_MAXIMA = 3600
 TEMPO_LIMITE = 10
@@ -256,6 +263,8 @@ class AoVivo:
         self.ultima_consulta: datetime | None = None
         self.modo: str | None = None
         self.desconhecidos: frozenset[int] = frozenset()
+        self._recuperar_em: datetime | None = None  # None: não precisa
+        self._espera_da_recuperacao = ESPERA_DA_RECUPERACAO
 
     @property
     def consultando(self) -> bool:
@@ -265,7 +274,7 @@ class AoVivo:
     def _em_campo(self, agora: datetime) -> bool:
         return any(
             jogo["situacao"] in EM_ANDAMENTO
-            and self._vistos[par]["visto"] == self.ultima_consulta
+            and self._vistos[par].get("faltas", 0) < FALTAS_PARA_SAIR
             and agora - self._vistos[par]["desde"] <= TETO_EM_CAMPO
             for par, jogo in self.jogos.items()
             if par in self._vistos
@@ -283,6 +292,10 @@ class AoVivo:
             return "jogo", INTERVALO_NO_JOGO
         proxima = min((inicio - ANTES_DO_INICIO for inicio in confirmados if inicio - ANTES_DO_INICIO > agora), default=None)
         ate_a_proxima = (proxima - agora).total_seconds() if proxima else ESPERA_MAXIMA
+        # Jogo atrasado pode passar da meia-noite: depois da janela, até o teto, a
+        # consulta segue a qualquer hora (servidor reiniciado, lista que falhou).
+        if any(inicio + DEPOIS_DO_INICIO < agora <= inicio + TETO_EM_CAMPO for inicio in confirmados):
+            return "dia", max(1.0, min(INTERVALO_SEM_HORA, ate_a_proxima))
         if agora.time() >= HORA_DE_ACORDAR:
             sem_hora = any(not certo and inicio.date() <= agora.date() <= inicio.date() + DIAS_SEM_HORA for _, inicio, certo in inicios)
             modo, intervalo = ("dia", INTERVALO_SEM_HORA) if sem_hora else ("sentinela", INTERVALO_SENTINELA)
@@ -315,11 +328,18 @@ class AoVivo:
         # último placar visto até o arquivo de resultados trazê-lo.
         jogos = {par: jogo for par, jogo in self.jogos.items() if par in pendentes}
         vistos = {par: dict(visto) for par, visto in self._vistos.items() if par in pendentes}
+        if not so_novos:
+            for par in vistos.keys() - novos.keys():
+                vistos[par]["faltas"] = vistos[par].get("faltas", 0) + 1
         for par, novo in novos.items():
             if par not in pendentes or (so_novos and par in jogos):
                 continue
-            visto = vistos.setdefault(par, {"desde": agora, "relativo": None, "minuto": None})
+            visto = vistos.get(par)
+            if visto is None or agora - visto["visto"] > VOLTA_DEPOIS or jogos.get(par, {}).get("situacao") == "adiado":
+                visto = vistos[par] = {"desde": agora, "relativo": None, "minuto": None}
             visto["visto"] = agora
+            visto["faltas"] = 0
+            visto["conferido"] = False
             jogos[par] = {
                 "casa": novo["casa"],
                 "fora": novo["fora"],
@@ -351,13 +371,35 @@ class AoVivo:
         encerrados = {par: jogo for par, jogo in converter(bruto).items() if jogo["situacao"] == "encerrado"}
         return self._juntar(encerrados, agora, so_novos=True)
 
-    async def rodar(self) -> None:
+    def _sumidos(self, agora: datetime) -> bool:
+        """Jogo em andamento que sumiu da lista sem o apito final, ainda não conferido."""
+        achou = False
+        for par, jogo in self.jogos.items():
+            visto = self._vistos.get(par)
+            if visto and jogo["situacao"] in EM_ANDAMENTO and not visto.get("conferido") and agora - visto["visto"] > CONFERIR_SUMIDO:
+                visto["conferido"] = True
+                achou = True
+        return achou
+
+    async def _talvez_recuperar(self, agora: datetime) -> None:
+        if self._sumidos(agora) and self._recuperar_em is None:
+            self._recuperar_em = agora
+        if self._recuperar_em is None or agora < self._recuperar_em:
+            return
         try:
             await asyncio.to_thread(self.recuperar)
-        except ErroDaFonte as erro:
-            self.erro = str(erro)
-        except Exception as erro:  # noqa: BLE001 - o placar ao vivo nunca derruba o site
-            self.erro = type(erro).__name__
+            self._recuperar_em = None
+            self._espera_da_recuperacao = ESPERA_DA_RECUPERACAO
+        except Exception as erro:  # noqa: BLE001 - tenta de novo mais tarde, com espera crescente
+            self.erro = str(erro) if isinstance(erro, ErroDaFonte) else type(erro).__name__
+            esperar = max(self._espera_da_recuperacao, getattr(erro, "esperar", 0.0))
+            self._recuperar_em = agora + timedelta(seconds=esperar)
+            self._espera_da_recuperacao = min(self._espera_da_recuperacao * 2, ESPERA_MAXIMA)
+
+    async def rodar(self) -> None:
+        # A recuperação dos encerrados vem depois da primeira consulta ao vivo:
+        # num deploy durante o jogo, o placar de agora chega primeiro.
+        self._recuperar_em = self._relogio()
         while True:
             espera = INTERVALO_SENTINELA
             try:
@@ -370,6 +412,9 @@ class AoVivo:
                 espera = max(espera, erro.esperar)
             except Exception as erro:  # noqa: BLE001 - o placar ao vivo nunca derruba o site
                 self.erro = type(erro).__name__
+            await self._talvez_recuperar(self._relogio())
+            if self._recuperar_em is not None:
+                espera = max(1.0, min(espera, (self._recuperar_em - self._relogio()).total_seconds()))
             await asyncio.sleep(espera)
 
     def estado(self) -> dict:

@@ -199,6 +199,7 @@ def carregar_proximos(caminho: Path = ARQUIVO_PROXIMOS) -> list[dict]:
             jogos.append(
                 {
                     "quando": hora_de_brasilia(linha["Date"], linha.get("Time") or ""),
+                    "semHora": not (linha.get("Time") or "").strip(),
                     "casa": linha["Home"].strip(),
                     "fora": linha["Away"].strip(),
                     "odd_casa": _odd(linha, "AvgH", "B365H", "MaxH"),

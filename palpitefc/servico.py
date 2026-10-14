@@ -90,6 +90,8 @@ class Painel:
         self.impacto_por_par = {(jogo["casa"], jogo["fora"]): jogo for jogo in self.simulacao["impacto"]}
         self._formas: dict[str, list[dict]] = {}
         self._confrontos: dict[frozenset, dict] = {}
+        # Jogos que o football-data listou sem a hora: a hora deles não é confirmada.
+        self._sem_hora_publicada: set[tuple[str, str]] = set()
         self.proximos = self._proximos(feitos)
 
     def forma_de(self, time: str) -> list[dict]:
@@ -173,6 +175,8 @@ class Painel:
             odds = {"casa": jogo["odd_casa"], "empate": jogo["odd_empate"], "fora": jogo["odd_fora"]}
             cartao = self._cartao(*par, odds)
             cartao["quando"] = self.hora_confirmada(*par, jogo["quando"].isoformat(timespec="minutes"))
+            if jogo.get("semHora"):
+                self._sem_hora_publicada.add(par)
             cartao["resultado"] = None
             cartoes.append(cartao)
             listados.add(par)
@@ -233,8 +237,9 @@ class Painel:
             par = (cartao["casa"], cartao["fora"])
             jogo = self.calendario.get(par)
             if cartao.get("quando") and not (jogo and jogo["adiado"]):
-                inicios.add((par, datetime.fromisoformat(cartao["quando"]), True))
-        com_hora = {par for par, _, _ in inicios}
+                certo = par not in self._sem_hora_publicada
+                inicios.add((par, datetime.fromisoformat(cartao["quando"]), certo))
+        com_hora = {par for par, _, certo in inicios if certo}
         for par in self.restantes:
             agenda = self.agenda(*par)
             if not agenda or agenda["atrasado"]:

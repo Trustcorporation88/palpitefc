@@ -29,8 +29,8 @@ class TesteApi(unittest.TestCase):
         self.assertEqual(resposta.headers["cache-control"], "no-store")
         ao_vivo = resposta.json()["aoVivo"]
         self.assertEqual(set(ao_vivo), {"ativo", "consultando", "ultimaConsulta", "erro", "jogos", "timesSemId", "idsDesconhecidos"})
-        # Os 20 times de hoje têm id na Bzzoiro.
-        self.assertEqual(ao_vivo["timesSemId"], [])
+        # Só o formato: na virada do ano a lista enche e não pode travar a atualização dos dados.
+        self.assertIsInstance(ao_vivo["timesSemId"], list)
 
     def test_ao_vivo_sem_token(self):
         resposta = self.cliente.get("/api/aovivo")
