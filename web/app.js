@@ -1039,6 +1039,22 @@ async function iniciar() {
 }
 
 let modoCadastro = false;
+let emailPendente = null;
+
+function mostrarReenviar(email) {
+  emailPendente = email;
+  document.querySelector("#reenviar").hidden = !email;
+}
+
+document.querySelector("#reenviar").addEventListener("click", async () => {
+  if (!emailPendente) return;
+  const resposta = await pedirAoSupabase("/auth/v1/resend", { type: "signup", email: emailPendente });
+  if (resposta.status === 429) {
+    avisar("#aviso-entrar", "Espere alguns minutos antes de pedir outro e-mail.");
+    return;
+  }
+  avisar("#aviso-entrar", resposta.ok ? "Enviamos de novo. Confira também a caixa de spam." : "Não deu para reenviar agora. Tente de novo em instantes.");
+});
 
 function alternarModo() {
   modoCadastro = !modoCadastro;
@@ -1063,13 +1079,19 @@ document.querySelector("#form-entrar").addEventListener("submit", async (evento)
     avisar("#aviso-entrar", "Muitas tentativas. Espere alguns minutos e tente de novo.");
     return;
   }
+  if (!resposta.ok && resposta.dados.error_code === "email_not_confirmed") {
+    avisar("#aviso-entrar", "Confirme o e-mail antes de entrar. Se o link não chegou, peça outro abaixo.");
+    mostrarReenviar(email);
+    return;
+  }
   if (!resposta.ok) {
     avisar("#aviso-entrar", modoCadastro ? "Não deu para criar a conta. Confira o e-mail e use uma senha de 8 caracteres ou mais." : "E-mail ou senha não batem.");
     return;
   }
   if (!resposta.dados.access_token) {
     // Com confirmação de e-mail ligada, o cadastro só entra depois do link.
-    avisar("#aviso-entrar", "Enviamos um link de confirmação para o seu e-mail. Confirme e depois entre aqui.");
+    avisar("#aviso-entrar", "Enviamos um link de confirmação para o seu e-mail. Confirme e depois entre aqui. Se não chegar em alguns minutos, confira a caixa de spam ou peça outro.");
+    mostrarReenviar(email);
     return;
   }
   sessao = sessaoDe(resposta.dados);
