@@ -84,3 +84,46 @@ def aceitou_o_termo(token: str, usuario_id: str) -> bool:
 
 def sair(token: str) -> None:
     _cache.pop(_chave(token), None)
+
+
+def usuario_de(token: str) -> dict | None:
+    """Quem é o dono do token, sem cache: usado só nas rotas de administrador."""
+    usuario = _chamar("/auth/v1/user", token)
+    return usuario if isinstance(usuario, dict) and usuario.get("id") else None
+
+
+def eh_admin(usuario: dict | None) -> bool:
+    admin = os.environ.get("ADMIN_EMAIL", "").strip().lower()
+    return bool(admin and usuario and str(usuario.get("email", "")).lower() == admin)
+
+
+def criar_conta(email: str, senha: str) -> str:
+    """Cria a conta já confirmada, sem e-mail. Devolve "criada" ou o motivo da recusa.
+
+    Usa a chave service_role, que só existe no servidor. Ela não aparece em
+    nenhuma resposta nem em log.
+    """
+    chave = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if not chave:
+        raise ContaIndisponivel("SUPABASE_SERVICE_ROLE_KEY não configurada")
+    corpo = json.dumps({"email": email, "password": senha, "email_confirm": True}).encode("utf-8")
+    pedido = urllib.request.Request(
+        _url("/auth/v1/admin/users"),
+        data=corpo,
+        method="POST",
+        headers={"apikey": chave, "Authorization": f"Bearer {chave}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(pedido, timeout=TEMPO_LIMITE):
+            return "criada"
+    except urllib.error.HTTPError as erro:
+        try:
+            motivo = json.loads(erro.read().decode("utf-8")).get("error_code", "")
+        except (ValueError, AttributeError):
+            motivo = ""
+        if erro.code in (400, 409, 422) and motivo in ("email_exists", "user_already_exists", "weak_password", "validation_failed"):
+            return motivo
+        raise ContaIndisponivel(f"HTTP {erro.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise ContaIndisponivel("Supabase fora do ar") from None
+

@@ -4,11 +4,12 @@ import asyncio
 import hashlib
 import html
 import os
+import re
 from contextlib import asynccontextmanager
 from functools import cache
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Body, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -55,11 +56,15 @@ SEM_CACHE = {"Cache-Control": "private, no-store"}
 ABERTAS = {"/api/saude"}
 
 
+def _token_do_pedido(request: Request) -> str:
+    cabecalho = request.headers.get("authorization", "")
+    return cabecalho[7:].strip() if cabecalho.lower().startswith("bearer ") else ""
+
+
 async def _barrar(request) -> JSONResponse | None:
     if not contas.configurado():
         return JSONResponse({"erro": "login não configurado no servidor"}, status_code=503, headers=SEM_CACHE)
-    cabecalho = request.headers.get("authorization", "")
-    token = cabecalho[7:].strip() if cabecalho.lower().startswith("bearer ") else ""
+    token = _token_do_pedido(request)
     try:
         liberado = bool(token) and await asyncio.to_thread(contas.pode_ver, token)
     except contas.ContaIndisponivel:
@@ -115,6 +120,44 @@ def placar_ao_vivo(response: Response) -> dict:
     # Muda a cada gol: sem cache.
     response.headers["Cache-Control"] = "no-store"
     return ao_vivo.estado() if ao_vivo else DESLIGADO
+
+
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+MOTIVOS_DA_CONTA = {
+    "email_exists": (409, "Já existe conta com este e-mail."),
+    "user_already_exists": (409, "Já existe conta com este e-mail."),
+    "weak_password": (400, "A senha precisa de 8 caracteres ou mais."),
+    "validation_failed": (400, "O e-mail ou a senha não são aceitos pelo Supabase."),
+}
+
+
+@app.get("/api/admin/eu")
+def sou_admin(request: Request) -> dict:
+    return {"admin": contas.eh_admin(contas.usuario_de(_token_do_pedido(request)))}
+
+
+@app.post("/api/admin/contas", status_code=201)
+def criar_conta(request: Request, corpo: dict = Body(...)) -> dict:
+    # O corpo vem como dict, sem o validador do FastAPI: um erro de validação
+    # devolveria a senha de volta na resposta.
+    if not contas.eh_admin(contas.usuario_de(_token_do_pedido(request))):
+        raise HTTPException(status_code=403, detail="Só o administrador cria contas.")
+    email, senha = corpo.get("email"), corpo.get("senha")
+    if not isinstance(email, str) or not isinstance(senha, str):
+        raise HTTPException(status_code=400, detail="Informe o e-mail e a senha.")
+    email = email.strip().lower()
+    if not EMAIL.fullmatch(email):
+        raise HTTPException(status_code=400, detail="E-mail inválido.")
+    if len(senha) < 8:
+        raise HTTPException(status_code=400, detail="A senha precisa de 8 caracteres ou mais.")
+    try:
+        resultado = contas.criar_conta(email, senha)
+    except contas.ContaIndisponivel:
+        raise HTTPException(status_code=503, detail="Não deu para falar com o Supabase agora.") from None
+    if resultado != "criada":
+        status, detalhe = MOTIVOS_DA_CONTA.get(resultado, (400, "Não deu para criar a conta."))
+        raise HTTPException(status_code=status, detail=detalhe)
+    return {"ok": True, "email": email}
 
 
 @app.get("/api/inicio")

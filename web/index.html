@@ -24,12 +24,11 @@
       <form class="termo-caixa" id="form-entrar">
         <p class="olho">Conta do PalpiteFC</p>
         <h1 id="titulo-entrar">Entrar</h1>
-        <p class="termo-lead">Use o e-mail e a senha da sua conta. O aceite dos termos fica registrado nela.</p>
+        <p class="termo-lead">Use o e-mail e a senha da sua conta. O aceite dos termos fica registrado nela. Não há cadastro público: a conta é criada por quem administra o site.</p>
         <label>E-mail <input type="email" name="email" autocomplete="email" required /></label>
         <label>Senha <input type="password" name="senha" autocomplete="current-password" minlength="8" required /></label>
         <p class="nota" id="aviso-entrar" role="status"></p>
         <button type="submit" class="botao" id="botao-entrar">Entrar</button>
-        <button type="button" class="botao" id="alternar-entrar">Criar conta</button>
         <button type="button" class="botao" id="reenviar" hidden>Reenviar e-mail de confirmação</button>
       </form>
     </div>
@@ -90,6 +89,7 @@
         <button type="button" data-pag="times">Times</button>
         <button type="button" data-pag="simular">Simular</button>
         <button type="button" data-pag="conta">A conta</button>
+        <button type="button" data-pag="contas" hidden>Contas</button>
       </nav>
     </div>
     <script src="/static/app.js?v={{versao}}"></script>

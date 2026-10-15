@@ -3,7 +3,7 @@ const SUPA_URL = document.querySelector('meta[name="palpitefc-supabase-url"]')?.
 const SUPA_CHAVE = document.querySelector('meta[name="palpitefc-supabase-chave"]')?.content || "";
 const TERMO_VERSAO = document.querySelector('meta[name="palpitefc-termo-versao"]')?.content || "";
 const ROTULOS = { casa: "Casa", empate: "Empate", fora: "Fora" };
-const PAGINAS = ["rodada", "tabela", "times", "simular", "conta"];
+const PAGINAS = ["rodada", "tabela", "times", "simular", "conta", "contas"];
 const VERSAO = document.documentElement.dataset.versao || "";
 
 const miolo = document.querySelector("#miolo");
@@ -894,7 +894,48 @@ async function paginaConta() {
   );
 }
 
+async function paginaContas() {
+  const formulario = bloco(
+    "section",
+    "painel",
+    `<h2>Criar conta</h2>
+    <p class="nota">A conta fica confirmada, sem e-mail de confirmação. Mande a senha para a pessoa por um canal seu, e peça para ela trocar depois.</p>
+    <form id="form-conta">
+      <label>E-mail <input type="email" name="email" autocomplete="off" required /></label>
+      <label>Senha inicial <input type="password" name="senha" autocomplete="new-password" minlength="8" required /></label>
+      <button type="submit" class="botao">Criar conta</button>
+      <p class="nota" id="aviso-conta" role="status"></p>
+    </form>`,
+  );
+  formulario.querySelector("#form-conta").addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    const campos = evento.target;
+    const aviso = campos.querySelector("#aviso-conta");
+    const token = await tokenAtual();
+    aviso.textContent = "Criando...";
+    try {
+      const resposta = await fetch("/api/admin/contas", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ email: campos.email.value, senha: campos.senha.value }),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        aviso.textContent = `Conta criada para ${dados.email}.`;
+        campos.reset();
+      } else {
+        aviso.textContent = dados.detail || "Não deu para criar a conta agora.";
+      }
+    } catch {
+      aviso.textContent = "Sem conexão agora. Tente de novo.";
+    }
+  });
+  miolo.replaceChildren(formulario);
+}
+
 const MONTAR = {
+  contas: paginaContas,
   rodada: paginaRodada,
   tabela: paginaTabela,
   times: paginaTimes,
@@ -1031,14 +1072,18 @@ async function iniciar() {
   try {
     const aceitou = await aceiteDoTermo(token);
     mostrar(aceitou ? "site" : "termo");
-    if (aceitou) abrir(rotaAtual());
+    if (aceitou) {
+      abrir(rotaAtual());
+      api("/api/admin/eu").then((dados) => {
+        document.querySelector('[data-pag="contas"]').hidden = !dados.admin;
+      }).catch(() => {});
+    }
   } catch {
     mostrar("entrar");
     avisar("#aviso-entrar", "Não deu para confirmar o aceite agora. Tente de novo.");
   }
 }
 
-let modoCadastro = false;
 let emailPendente = null;
 
 function mostrarReenviar(email) {
@@ -1056,25 +1101,13 @@ document.querySelector("#reenviar").addEventListener("click", async () => {
   avisar("#aviso-entrar", resposta.ok ? "Enviamos de novo. Confira também a caixa de spam." : "Não deu para reenviar agora. Tente de novo em instantes.");
 });
 
-function alternarModo() {
-  modoCadastro = !modoCadastro;
-  document.querySelector("#titulo-entrar").textContent = modoCadastro ? "Criar conta" : "Entrar";
-  document.querySelector("#botao-entrar").textContent = modoCadastro ? "Criar conta" : "Entrar";
-  document.querySelector("#alternar-entrar").textContent = modoCadastro ? "Já tenho conta" : "Criar conta";
-  document.querySelector("#form-entrar input[name=senha]").autocomplete = modoCadastro ? "new-password" : "current-password";
-  avisar("#aviso-entrar", "");
-}
-
-document.querySelector("#alternar-entrar").addEventListener("click", alternarModo);
 
 document.querySelector("#form-entrar").addEventListener("submit", async (evento) => {
   evento.preventDefault();
   const email = evento.target.email.value.trim();
   const senha = evento.target.senha.value;
-  avisar("#aviso-entrar", modoCadastro ? "Criando a conta..." : "Entrando...");
-  const resposta = modoCadastro
-    ? await pedirAoSupabase("/auth/v1/signup", { email, password: senha })
-    : await pedirAoSupabase("/auth/v1/token?grant_type=password", { email, password: senha });
+  avisar("#aviso-entrar", "Entrando...");
+  const resposta = await pedirAoSupabase("/auth/v1/token?grant_type=password", { email, password: senha });
   if (resposta.status === 429) {
     avisar("#aviso-entrar", "Muitas tentativas. Espere alguns minutos e tente de novo.");
     return;
@@ -1084,14 +1117,8 @@ document.querySelector("#form-entrar").addEventListener("submit", async (evento)
     mostrarReenviar(email);
     return;
   }
-  if (!resposta.ok) {
-    avisar("#aviso-entrar", modoCadastro ? "Não deu para criar a conta. Confira o e-mail e use uma senha de 8 caracteres ou mais." : "E-mail ou senha não batem.");
-    return;
-  }
-  if (!resposta.dados.access_token) {
-    // Com confirmação de e-mail ligada, o cadastro só entra depois do link.
-    avisar("#aviso-entrar", "Enviamos um link de confirmação para o seu e-mail. Confirme e depois entre aqui. Se não chegar em alguns minutos, confira a caixa de spam ou peça outro.");
-    mostrarReenviar(email);
+  if (!resposta.ok || !resposta.dados.access_token) {
+    avisar("#aviso-entrar", "E-mail ou senha não batem.");
     return;
   }
   sessao = sessaoDe(resposta.dados);
@@ -1133,6 +1160,7 @@ document.querySelector("#sair").addEventListener("click", async () => {
   respostas.clear();
   pedidoInicial = null;
   inicio = null;
+  document.querySelector('[data-pag="contas"]').hidden = true;
   mostrar("entrar");
   avisar("#aviso-entrar", "Você saiu da conta.");
 });
