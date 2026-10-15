@@ -241,6 +241,12 @@ def raiz() -> HTMLResponse:
     return HTMLResponse(pagina_inicial(), headers={"Cache-Control": "no-cache"})
 
 
+@app.get("/privacidade", include_in_schema=False)
+def privacidade() -> FileResponse:
+    # Pública: a política tem de estar disponível antes do login, inclusive na tela de entrada.
+    return FileResponse(WEB / "privacidade.html", media_type="text/html; charset=utf-8", headers={"Cache-Control": "public, max-age=3600"})
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> FileResponse:
     return FileResponse(WEB / "favicon.svg", media_type="image/svg+xml", headers={"Cache-Control": CACHE_ESTATICO})

@@ -25,6 +25,13 @@ class TesteApi(unittest.TestCase):
         for patch in cls.patches:
             patch.stop()
 
+    def test_privacidade_e_publica(self):
+        with TestClient(app) as sem_login:
+            resposta = sem_login.get("/privacidade")
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("LGPD", resposta.text)
+        self.assertIn("Privacidade", resposta.text)
+
     def test_api_pede_login(self):
         sem_login = TestClient(app)
         with sem_login:
