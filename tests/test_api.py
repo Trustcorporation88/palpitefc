@@ -32,6 +32,32 @@ class TesteApi(unittest.TestCase):
         self.assertIn("LGPD", resposta.text)
         self.assertIn("Privacidade", resposta.text)
 
+    def test_conferencia_exige_o_token_de_conferencia(self):
+        from datetime import datetime
+        from types import SimpleNamespace
+        from palpitefc import server
+
+        jogos = {
+            ("Mirassol", "Internacional"): {
+                "casa": "Mirassol", "fora": "Internacional", "golsCasa": 2, "golsFora": 0,
+                "situacao": "encerrado", "minuto": None, "quando": datetime(2026, 10, 16, 20, 0),
+            },
+            ("Flamengo RJ", "Bahia"): {
+                "casa": "Flamengo RJ", "fora": "Bahia", "golsCasa": 1, "golsFora": 1,
+                "situacao": "ao vivo", "minuto": "30", "quando": datetime(2026, 10, 17, 18, 0),
+            },
+        }
+        with mock.patch.dict("os.environ", {"CONFERENCIA_TOKEN": "conferencia-de-teste-1234567890"}),                 mock.patch.object(server, "ao_vivo", SimpleNamespace(jogos=jogos)), TestClient(app) as sem_login:
+            self.assertEqual(sem_login.get("/api/conferencia").status_code, 401)
+            self.assertEqual(sem_login.get("/api/conferencia", headers={"X-Conferencia-Token": "errado"}).status_code, 401)
+            resposta = sem_login.get("/api/conferencia", headers={"X-Conferencia-Token": "conferencia-de-teste-1234567890"})
+        self.assertEqual(resposta.status_code, 200)
+        dados = resposta.json()
+        self.assertEqual(dados["total"], 1)
+        self.assertEqual(dados["jogos"][0]["placar"], "2–0")
+        self.assertEqual(dados["jogos"][0]["resultado"], "casa")
+        self.assertIn("chance", dados["jogos"][0])
+
     def test_api_pede_login(self):
         sem_login = TestClient(app)
         with sem_login:

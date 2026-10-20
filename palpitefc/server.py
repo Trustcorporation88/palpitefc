@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import hmac
 import html
 import os
 import re
@@ -53,7 +54,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 SEM_CACHE = {"Cache-Control": "private, no-store"}
 # Só o aviso de saúde fica aberto: todo o resto da API é de quem entrou e aceitou o termo.
-ABERTAS = {"/api/saude"}
+ABERTAS = {"/api/saude", "/api/conferencia"}
 
 
 def _token_do_pedido(request: Request) -> str:
@@ -158,6 +159,47 @@ def criar_conta(request: Request, corpo: dict = Body(...)) -> dict:
         status, detalhe = MOTIVOS_DA_CONTA.get(resultado, (400, "Não deu para criar a conta."))
         raise HTTPException(status_code=status, detail=detalhe)
     return {"ok": True, "email": email}
+
+
+def _resultado(placar: tuple[int, int]) -> str:
+    return "casa" if placar[0] > placar[1] else "fora" if placar[1] > placar[0] else "empate"
+
+
+@app.get("/api/conferencia")
+def conferencia(request: Request) -> dict:
+    """Jogos encerrados desde o começo da temporada, com a chance que o site deu antes do apito.
+
+    Só para conferir o modelo: exige o token CONFERENCIA_TOKEN no cabeçalho
+    X-Conferencia-Token. Não tem placar ao vivo, só jogos já encerrados.
+    """
+    esperado = os.environ.get("CONFERENCIA_TOKEN", "").strip()
+    recebido = request.headers.get("x-conferencia-token", "")
+    if not esperado or not hmac.compare_digest(recebido.encode("utf-8"), esperado.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Token de conferência inválido.")
+    jogos = []
+    if ao_vivo:
+        for (casa, fora), jogo in ao_vivo.jogos.items():
+            if jogo["situacao"] != "encerrado" or jogo["golsCasa"] is None:
+                continue
+            try:
+                cartao = painel().simular(casa, fora)
+            except KeyError:
+                continue
+            placar = (jogo["golsCasa"], jogo["golsFora"])
+            jogos.append(
+                {
+                    "quando": jogo["quando"].isoformat(timespec="minutes") if jogo["quando"] else None,
+                    "casa": casa,
+                    "fora": fora,
+                    "placar": f"{placar[0]}–{placar[1]}",
+                    "chance": cartao["chance"],
+                    "maisProvavel": cartao["maisProvavel"],
+                    "resultado": _resultado(placar),
+                    "acertou": cartao["maisProvavel"] == _resultado(placar),
+                }
+            )
+    jogos.sort(key=lambda linha: linha["quando"] or "")
+    return {"jogos": jogos, "acertos": sum(linha["acertou"] for linha in jogos), "total": len(jogos)}
 
 
 @app.get("/api/inicio")
